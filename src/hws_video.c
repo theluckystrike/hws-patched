@@ -1016,6 +1016,7 @@ static int hws_vidioc_enum_frameintervals(struct file *file, void *fh,
 	//printk( "%s FrameIndex=%d W=%d H=%d  FrameRate=%d \n", __func__,Index,fival->width,fival->height,FrameRate);
     return 0;
 }
+
 int hws_vidioc_s_parm(struct file *file, void *fh,struct v4l2_streamparm *a)
 {
 	struct hws_video *videodev = video_drvdata(file);
@@ -1034,6 +1035,29 @@ int hws_vidioc_s_parm(struct file *file, void *fh,struct v4l2_streamparm *a)
 	//printk( "%s(ch-%d)io_frame_rate =%d  in_frame_rate =%d \n", __func__,videodev->index,io_frame_rate,in_frame_rate);
 	return 0;
 }
+
+static int hws_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
+{
+    struct hws_video *vid = container_of(ctrl->handler,
+                                         struct hws_video,
+                                         ctrl_handler);
+
+    switch (ctrl->id) {
+    case V4L2_CID_DV_RX_POWER_PRESENT:
+        /* Read hardware to detect 5 V presence on the HDMI RX */
+        ctrl->val = hdmi_5v_detect(vid);
+        return 0;
+
+    case V4L2_CID_DV_RX_IT_CONTENT_TYPE:
+        /* Read hardware to determine IT content type */
+        ctrl->val = hdmi_content_type(vid);
+        return 0;
+
+    default:
+        return -EINVAL;
+    }
+}
+
 #if 0
 static int hws_vidioc_dqbuf(struct file *file, void *priv, struct v4l2_buffer *p)
 {
@@ -1087,6 +1111,11 @@ static const struct v4l2_ioctl_ops hws_ioctl_fops = {
 	.vidioc_unsubscribe_event = v4l2_event_unsubscribe,
 	.vidioc_g_parm = hws_vidioc_g_parm,
 	.vidioc_s_parm = hws_vidioc_s_parm,
+};
+
+
+static const struct v4l2_ctrl_ops hws_ctrl_ops = {
+    .g_volatile_ctrl = hws_g_volatile_ctrl,
 };
 
 static int hws_queue_setup(struct vb2_queue *q,
@@ -3233,6 +3262,7 @@ int hws_video_register(struct hws_pcie_dev *dev)
 		vdev->device_caps = V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_STREAMING;
 		vdev->v4l2_dev = &(dev->video[i].v4l2_dev);
 		vdev->lock = &(dev->video[i].video_lock);
+		vdev->ctrl_handler= &(dev->video[i].ctrl_handler);
 		vdev->fops = &hws_fops;
 		strcpy(vdev->name,KBUILD_MODNAME);
 		vdev->release = video_device_release_empty;
@@ -4038,6 +4068,7 @@ static void hws_remove(struct pci_dev *pdev)
 		vdev = &dev->video[i].vdev;
 		video_unregister_device(vdev);
 		v4l2_device_unregister(&dev->video[i].v4l2_dev);
+        v4l2_ctrl_handler_free(&dev->video[i].ctrl_handler);
 	}
 	//-----------------
 	if(dev->wq)
@@ -5750,6 +5781,49 @@ static int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 		//---------------
 		for (i = 0; i<MAX_VID_CHANNELS; i++)
 		{
+            struct hws_video *vid = &gdev->video[i];
+            struct v4l2_ctrl_handler *hdl = &vid->ctrl_handler;
+
+            /* 1. Allocate the per-device control handler (room for 2 controls) */
+            v4l2_ctrl_handler_init(hdl, 2);
+
+            /* 2. Create the “5-V detect” boolean (volatile) */
+            vid->detect_tx_5v_ctrl =
+                v4l2_ctrl_new_std(hdl, &hws_ctrl_ops,
+                                  V4L2_CID_DV_RX_POWER_PRESENT,
+                                  0, 1, 1, 0);
+            /* mark it volatile + read-only */
+            vid->detect_tx_5v_ctrl->flags |=
+                V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_READ_ONLY;
+
+           /* 3. Create the “IT content-type” enum (volatile) */
+           vid->content_type =
+               v4l2_ctrl_new_std(hdl, &hws_ctrl_ops,
+                                 V4L2_CID_DV_RX_IT_CONTENT_TYPE,
+                                 V4L2_DV_IT_CONTENT_TYPE_NO_ITC,
+                                 V4L2_DV_IT_CONTENT_TYPE_GRAPHICS,
+                                 1,
+                                 V4L2_DV_IT_CONTENT_TYPE_NO_ITC);
+
+            vid->content_type->flags |=
+                V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_READ_ONLY;
+
+
+           v4l2_ctrl_handler_setup(hdl);
+
+           /* 4. Bail out cleanly if ctrl creation failed */
+           if (hdl->error) {
+                   ret = hdl->error;
+                   dev_err(&pdev->dev,
+                           "ctrl-handler init failed on channel %d: %d\n",
+                           i, ret);
+                   goto err_ctrl;
+           }
+
+               /* 5. Attach the handler to the v4l2_device / video_device later:
+                *    hws_video_register() expects ->ctrl_handler to be ready.
+                */
+       }
 			//gdev->m_nVideoIndex[i] =0;
 			gdev->m_nRDVideoIndex[i] =0;
 			gdev->m_bVCapIntDone[i] =0;
@@ -5861,6 +5935,9 @@ err_mem_alloc:
 		 gdev->m_bBufferAllocate = TRUE;
 		 DmaMemFreePool(gdev);
 		 gdev->m_bBufferAllocate = FALSE;
+err_ctrl:
+        while (--i >= 0)
+                v4l2_ctrl_handler_free(&gdev->video[i].ctrl_handler);
 err_register:
 		iounmap(gdev->info.mem[0].internal_addr);
 		irq_teardown(gdev);
