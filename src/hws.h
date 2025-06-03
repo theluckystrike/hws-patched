@@ -22,6 +22,7 @@
 #include <sound/pcm.h>
 #include <sound/opl3.h>
 
+#include <linux/bitops.h>
 #include <linux/kernel.h>
 #include <linux/timer.h>
 #include <linux/jiffies.h>
@@ -335,6 +336,10 @@ struct hws_video{
 	int current_out_framerate;
 	int current_out_pixfmt;
 	int current_out_size_index;
+
+	struct v4l2_ctrl_handler ctrl_handler;
+	struct v4l2_ctrl *detect_tx_5v_ctrl;
+	struct v4l2_ctrl *content_type;
 };
 	
 struct hws_audio{
