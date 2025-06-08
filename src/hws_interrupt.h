@@ -1,0 +1,34 @@
+#ifndef HWS_INTERRUPT_H
+#define HWS_INTERRUPT_H
+
+#include <linux/pci.h>              /* struct pci_dev */
+#include "hws_common.h"             /* struct hws_pcie_dev */
+
+/**
+ * hws_request_irqs() – allocate and register all IRQs and threaded handlers
+ * @dev:    your driver’s private hws_pcie_dev
+ * @pdev:   the kernel’s pci_dev pointer
+ *
+ * Returns 0 on success or a negative errno.
+ */
+int hws_request_irqs(struct hws_pcie_dev *dev, struct pci_dev *pdev);
+
+/**
+ * hws_free_irqs() – free IRQs and tear down all DPC threads
+ * @dev:    your driver’s private hws_pcie_dev
+ */
+void hws_free_irqs(struct hws_pcie_dev *dev);
+int hws_irq_setup(struct hws_pcie_dev *lro, struct pci_dev *pdev);
+
+void DpcForIsr_Audio0(unsigned long data);
+void DpcForIsr_Audio1(unsigned long data);
+void DpcForIsr_Audio2(unsigned long data);
+void DpcForIsr_Audio3(unsigned long data);
+
+void DpcForIsr_Video0(unsigned long data);
+void DpcForIsr_Video1(unsigned long data);
+void DpcForIsr_Video2(unsigned long data);
+void DpcForIsr_Video3(unsigned long data);
+
+#endif /* HWS_INTERRUPT_H */
+

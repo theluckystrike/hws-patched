@@ -11,6 +11,7 @@
 #include "hws.h"
 #include "hws_reg.h"
 #include "hws_scaler.h"
+#include "hws_interrupt.h"
 
 #include <sound/core.h>
 #include <sound/control.h>
@@ -2681,7 +2682,7 @@ static void hws_remove(struct pci_dev *pdev)
 	//StopSys(dev);
 	StopDevice(dev);
 	/* disable interrupts */
-	irq_teardown(dev);
+	hws_free_irqs(dev);
 	StopKSThread(dev);
 	//printk("hws_remove  0\n");
 	for (i = 0; i < MAX_VID_CHANNELS; i++) {
@@ -3870,7 +3871,7 @@ static int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 	gdev->info.mem[0].memtype = UIO_MEM_PHYS;
 
 	//printk(" pdev->irq = %d \n",pdev->irq);
-	ret = irq_setup(gdev, pdev);
+	ret = hws_irq_setup(gdev, pdev);
 	if (ret)
 		goto err_register;
 
@@ -4044,7 +4045,7 @@ err_ctrl:
 		v4l2_ctrl_handler_free(&gdev->video[i].ctrl_handler);
 err_register:
 	iounmap(gdev->info.mem[0].internal_addr);
-	irq_teardown(gdev);
+	hws_free_irqs(gdev);
 disable_msi:
 	if (gdev->msix_enabled) {
 		pci_disable_msix(pdev);
