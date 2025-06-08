@@ -16,5 +16,6 @@ void CheckVideoFmt(struct hws_pcie_dev *pdx);
 void InitVideoSys(struct hws_pcie_dev *pdx, int set);
 int Get_Video_Status(struct hws_pcie_dev *pdx, unsigned int ch);
 int MemCopyVideoToSteam(struct hws_pcie_dev *pdx, int nDecoder);
+void video_data_process(struct work_struct *p_work);
 
 #endif /* HWS_VIDEO_PIPELINE_H */
