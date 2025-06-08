@@ -1,7 +1,6 @@
 #include "hws_scaler.h"
 
-
-static void SetNoVideoMem(uint8_t *pDest, int w, int h)
+void SetNoVideoMem(uint8_t *pDest, int w, int h)
 {
 	int x, y;
 	uint8_t *pST;
@@ -24,7 +23,7 @@ static void SetNoVideoMem(uint8_t *pDest, int w, int h)
 	}
 }
 
-static void All_VideoScaler(BYTE *pSrc, BYTE *pOut, int in_w, int in_h,
+void All_VideoScaler(BYTE *pSrc, BYTE *pOut, int in_w, int in_h,
 			    int out_w, int out_h)
 {
 	BYTE *pSrcBuf;
@@ -96,7 +95,7 @@ static void All_VideoScaler(BYTE *pSrc, BYTE *pOut, int in_w, int in_h,
 	}
 }
 
-static void VideoScaler(BYTE *pSrc, BYTE *pOut, int in_w, int in_h, int out_w,
+void VideoScaler(BYTE *pSrc, BYTE *pOut, int in_w, int in_h, int out_w,
 			int out_h)
 {
 	if ((in_w == 1920) && (in_h == 1080) && (out_w == 1280) &&
@@ -162,7 +161,7 @@ static void VideoScaler(BYTE *pSrc, BYTE *pOut, int in_w, int in_h, int out_w,
 	}
 }
 
-static void FillNV12ToYUY2(BYTE *pSrc, BYTE *pOut, int nw, int nh,
+void FillNV12ToYUY2(BYTE *pSrc, BYTE *pOut, int nw, int nh,
 			   int interlace)
 {
 	BYTE *pVideoMem = pOut; // g_pD1TempBuffer;
@@ -470,7 +469,7 @@ static void FillNV12ToYUY2(BYTE *pSrc, BYTE *pOut, int nw, int nh,
 	}
 }
 //-----------
-static void SetDeInterlace(BYTE *pSrc, BYTE *pOut, int nw, int nh,
+void SetDeInterlace(BYTE *pSrc, BYTE *pOut, int nw, int nh,
 			   int interlace)
 {
 	int dwSrcPitch = nw * 2;
@@ -492,7 +491,7 @@ static void SetDeInterlace(BYTE *pSrc, BYTE *pOut, int nw, int nh,
 	}
 }
 //----------------------------------------------------------------
-static void FillYUU2(BYTE *pSrc, BYTE *pOut, int nw, int nh, int interlace)
+void FillYUU2(BYTE *pSrc, BYTE *pOut, int nw, int nh, int interlace)
 {
 	BYTE *pVideoMem = pOut; // g_pD1TempBuffer;
 	//	DWORD dwDstPitch = nw;
@@ -685,7 +684,7 @@ static void FillYUU2(BYTE *pSrc, BYTE *pOut, int nw, int nh, int interlace)
 	}
 }
 
-static void FHD_To_800X600_Scaler(BYTE *pSrc, BYTE *pOut, int in_w, int in_h,
+void FHD_To_800X600_Scaler(BYTE *pSrc, BYTE *pOut, int in_w, int in_h,
 				  int out_w, int out_h)
 {
 	int x, y;
@@ -725,7 +724,7 @@ static void FHD_To_800X600_Scaler(BYTE *pSrc, BYTE *pOut, int in_w, int in_h,
 		}
 	}
 }
-static void HD_To_800X600_Scaler(BYTE *pSrc, BYTE *pOut, int in_w, int in_h,
+void HD_To_800X600_Scaler(BYTE *pSrc, BYTE *pOut, int in_w, int in_h,
 				 int out_w, int out_h)
 {
 	int y;
@@ -741,7 +740,7 @@ static void HD_To_800X600_Scaler(BYTE *pSrc, BYTE *pOut, int in_w, int in_h,
 		pSrcBuf += in_w * 2;
 	}
 }
-static void SD_NTSC_To_SD_PAL_Scaler(BYTE *pSrc, BYTE *pOut, int in_w, int in_h,
+void SD_NTSC_To_SD_PAL_Scaler(BYTE *pSrc, BYTE *pOut, int in_w, int in_h,
 				     int out_w, int out_h)
 {
 	//int x,y;
@@ -778,7 +777,7 @@ static void SD_NTSC_To_SD_PAL_Scaler(BYTE *pSrc, BYTE *pOut, int in_w, int in_h,
 	}
 }
 
-static void SD_PAL_To_SD_NTSC_Scaler(BYTE *pSrc, BYTE *pOut, int in_w, int in_h,
+void SD_PAL_To_SD_NTSC_Scaler(BYTE *pSrc, BYTE *pOut, int in_w, int in_h,
 				     int out_w, int out_h)
 {
 	// int x,y;
@@ -791,7 +790,8 @@ static void SD_PAL_To_SD_NTSC_Scaler(BYTE *pSrc, BYTE *pOut, int in_w, int in_h,
 	// PAL 720X576  NTSC 720X480
 	memcpy(pDestBuf, (pSrcBuf + 48 * in_w * 2), out_h * out_w * 2);
 }
-static void SD_NTSC_To_FHD_Scaler(BYTE *pSrc, BYTE *pOut, int in_w, int in_h,
+
+void SD_NTSC_To_FHD_Scaler(BYTE *pSrc, BYTE *pOut, int in_w, int in_h,
 				  int out_w, int out_h)
 {
 	int x, y;
@@ -867,7 +867,7 @@ static void SD_NTSC_To_FHD_Scaler(BYTE *pSrc, BYTE *pOut, int in_w, int in_h,
 	//---
 }
 
-static void SD_PAL_To_FHD_Scaler(BYTE *pSrc, BYTE *pOut, int in_w, int in_h,
+void SD_PAL_To_FHD_Scaler(BYTE *pSrc, BYTE *pOut, int in_w, int in_h,
 				 int out_w, int out_h)
 {
 	int x, y;
@@ -919,7 +919,7 @@ static void SD_PAL_To_FHD_Scaler(BYTE *pSrc, BYTE *pOut, int in_w, int in_h,
 	}
 }
 
-static void SD_PAL_To_HD_Scaler(BYTE *pSrc, BYTE *pOut, int in_w, int in_h,
+void SD_PAL_To_HD_Scaler(BYTE *pSrc, BYTE *pOut, int in_w, int in_h,
 				int out_w, int out_h)
 {
 	int x, y;
@@ -959,7 +959,7 @@ static void SD_PAL_To_HD_Scaler(BYTE *pSrc, BYTE *pOut, int in_w, int in_h,
 		//------------------
 	}
 }
-static void V1280X1024_To_FHD_Scaler(BYTE *pSrc, BYTE *pOut, int in_w, int in_h,
+void V1280X1024_To_FHD_Scaler(BYTE *pSrc, BYTE *pOut, int in_w, int in_h,
 				     int out_w, int out_h)
 {
 	BYTE *pSrcBuf;
@@ -1236,8 +1236,7 @@ void V1280X1024_NTSC_Scaler(BYTE *pSrc, BYTE *pOut, int in_w, int in_h,
 	}
 }
 
-void V1280X1024_PAL_Scaler(BYTE *pSrc, BYTE *pOut, int in_w, int in_h,
-			   int out_w, int out_h)
+void V1280X1024_PAL_Scaler(BYTE *pSrc, BYTE *pOut, int in_w, int in_h, int out_w, int out_h)
 {
 	int y;
 	BYTE *pSrcBuf;
@@ -1254,7 +1253,7 @@ void V1280X1024_PAL_Scaler(BYTE *pSrc, BYTE *pOut, int in_w, int in_h,
 		y = y + 1;
 	}
 }
-static void VideoRotate90deg(BYTE *pSrc, BYTE *pOut, int in_w, int in_h,
+void VideoRotate90deg(BYTE *pSrc, BYTE *pOut, int in_w, int in_h,
 			     int out_w, int out_h)
 
 {

@@ -1,4 +1,6 @@
 #include "hws_dma.h"
+#include "hws_reg.h"
+#include "hws_pci.h"
 
 void DmaMemFreePool(struct hws_pcie_dev *pdx)
 {
