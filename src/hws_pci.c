@@ -392,3 +392,112 @@ struct hws_pcie_dev *alloc_dev_instance(struct pci_dev *pdev)
 
 	return lro;
 }
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 5, 0)
+static void enable_pcie_relaxed_ordering(struct pci_dev *dev)
+{
+	pcie_capability_set_word(dev, PCI_EXP_DEVCTL, PCI_EXP_DEVCTL_RELAX_EN);
+}
+#else
+static void __devinit enable_pcie_relaxed_ordering(struct pci_dev *dev)
+{
+	u16 v;
+	int pos;
+
+	pos = pci_pcie_cap(dev);
+	if (pos > 0) {
+		pci_read_config_word(dev, pos + PCI_EXP_DEVCTL, &v);
+		v |= PCI_EXP_DEVCTL_RELAX_EN;
+		pci_write_config_word(dev, pos + PCI_EXP_DEVCTL, v);
+	}
+}
+#endif
+//--------------------------------------
+
+/* type = PCI_CAP_ID_MSI or PCI_CAP_ID_MSIX */
+int msi_msix_capable(struct pci_dev *dev, int type)
+{
+	struct pci_bus *bus;
+	int ret;
+	//printk("msi_msix_capable in \n");
+	if (!dev || dev->no_msi) {
+		printk("msi_msix_capable no_msi exit \n");
+		return 0;
+	}
+
+	for (bus = dev->bus; bus; bus = bus->parent) {
+		if (bus->bus_flags & PCI_BUS_FLAGS_NO_MSI) {
+			printk("msi_msix_capable PCI_BUS_FLAGS_NO_MSI \n");
+			return 0;
+		}
+	}
+	ret = arch_msi_check_device(dev, 1, type);
+	if (ret) {
+		return 0;
+	}
+	ret = pci_find_capability(dev, type);
+	if (!ret) {
+		printk("msi_msix_capable pci_find_capability =%d\n", ret);
+		return 0;
+	}
+
+	return 1;
+}
+
+int probe_scan_for_msi(struct hws_pcie_dev *lro, struct pci_dev *pdev)
+{
+	//int i;
+	int rc = 0;
+	//int req_nvec = MAX_NUM_ENGINES + MAX_USER_IRQ;
+
+	//BUG_ON(!lro);
+	//BUG_ON(!pdev);
+	//if (msi_msix_capable(pdev, PCI_CAP_ID_MSIX)) {
+	//		printk("Enabling MSI-X\n");
+	//		for (i = 0; i < req_nvec; i++)
+	//			lro->entry[i].entry = i;
+	//
+	//		rc = pci_enable_msix(pdev, lro->entry, req_nvec);
+	//		if (rc < 0)
+	//			printk("Couldn't enable MSI-X mode: rc = %d\n", rc);
+
+	//		lro->msix_enabled = 1;
+	//		lro->msi_enabled = 0;
+	//	}
+	//else
+
+	if (msi_msix_capable(pdev, PCI_CAP_ID_MSI)) {
+		/* enable message signalled interrupts */
+		//printk("pci_enable_msi()\n");
+		rc = pci_enable_msi(pdev);
+		if (rc < 0) {
+			printk("Couldn't enable MSI mode: rc = %d\n", rc);
+		}
+		lro->msi_enabled = 1;
+		lro->msix_enabled = 0;
+	} else {
+		//printk("MSI/MSI-X not detected - using legacy interrupts\n");
+		lro->msi_enabled = 0;
+		lro->msix_enabled = 0;
+	}
+
+	return rc;
+}
+
+void WRITE_REGISTER_ULONG(struct hws_pcie_dev *pdx, u32 RegisterOffset,
+				 u32 Value)
+{
+	//map_bar0_addr[RegisterOffset/4] = Value;
+	char *bar0;
+	bar0 = (char *)pdx->map_bar0_addr;
+	iowrite32(Value, bar0 + RegisterOffset);
+	//map_bar0_addr[RegisterOffset/4] = Value;
+}
+
+u32 READ_REGISTER_ULONG(struct hws_pcie_dev *pdx, u32 RegisterOffset)
+{
+	char *bar0;
+	bar0 = (char *)pdx->map_bar0_addr;
+	//return(map_bar0_addr[RegisterOffset/4]);
+	return (ioread32(bar0 + RegisterOffset));
+}
