@@ -1,6 +1,7 @@
 #include "hws_interrupt.h"
 #include "hws_pci.h"
 #include "hws_reg.h"
+#include "hws_video_pipeline.h"
 #include "hws_audio_pipeline.h"
 
 static int SetQueue(struct hws_pcie_dev *pdx, int nDecoder)
@@ -31,63 +32,6 @@ static int SetQueue(struct hws_pcie_dev *pdx, int nDecoder)
 	}
 	pdx->m_nVideoBusy[nDecoder] = 0;
 	return status;
-}
-
-int hws_irq_setup(struct hws_pcie_dev *lro, struct pci_dev *pdev)
-{
-	int rc = 0;
-	u32 irq_flag;
-	u8 val;
-	//void *reg;
-	//u32 w;
-
-	//BUG_ON(!lro);
-
-	//if (lro->msix_enabled) {
-	//	rc = msix_irq_setup(lro);
-	//}
-	//else
-	{
-		if (!lro->msi_enabled) {
-			pci_read_config_byte(pdev, PCI_INTERRUPT_PIN, &val);
-			//printk("Legacy Interrupt register value = %d\n", val);
-		}
-		//irq_flag = lro->msi_enabled ? 0 : IRQF_SHARED;
-		irq_flag = lro->msi_enabled ? IRQF_SHARED : 0;
-		//irq_flag = IRQF_SHARED;
-
-		rc = request_irq(pdev->irq, irqhandler, irq_flag,
-				 pci_name(pdev), lro); // IRQF_TRIGGER_HIGH
-		if (rc) {
-			//printk("Couldn't use IRQ#%d, rc=%d\n", pdev->irq, rc);
-		} else {
-			lro->irq_line = (int)pdev->irq;
-			//printk("Using IRQ#%d with  MSI_EN=%d \n", pdev->irq,lro->msi_enabled);
-		}
-	}
-
-	return rc;
-}
-
-
-void hws_free_irqs(struct hws_pcie_dev *lro)
-{
-	//int i;
-
-	//BUG_ON(!lro);
-
-	//if (lro->msix_enabled) {
-	//	for (i = 0; i < lro->irq_user_count; i++) {
-	//		printk("Releasing IRQ#%d\n", lro->entry[i].vector);
-	//		free_irq(lro->entry[i].vector, &lro->user_irq[i]);
-	//	}
-	//}
-	//else
-
-	if (lro->irq_line != -1) {
-		//printk("Releasing IRQ#%d\n", lro->irq_line);
-		free_irq(lro->irq_line, lro);
-	}
 }
 
 //-----------------------------
@@ -166,6 +110,64 @@ static irqreturn_t irqhandler(int irq, void *info)
 
     return IRQ_HANDLED;
 }
+
+int hws_irq_setup(struct hws_pcie_dev *lro, struct pci_dev *pdev)
+{
+	int rc = 0;
+	u32 irq_flag;
+	u8 val;
+	//void *reg;
+	//u32 w;
+
+	//BUG_ON(!lro);
+
+	//if (lro->msix_enabled) {
+	//	rc = msix_irq_setup(lro);
+	//}
+	//else
+	{
+		if (!lro->msi_enabled) {
+			pci_read_config_byte(pdev, PCI_INTERRUPT_PIN, &val);
+			//printk("Legacy Interrupt register value = %d\n", val);
+		}
+		//irq_flag = lro->msi_enabled ? 0 : IRQF_SHARED;
+		irq_flag = lro->msi_enabled ? IRQF_SHARED : 0;
+		//irq_flag = IRQF_SHARED;
+
+		rc = request_irq(pdev->irq, irqhandler, irq_flag,
+				 pci_name(pdev), lro); // IRQF_TRIGGER_HIGH
+		if (rc) {
+			//printk("Couldn't use IRQ#%d, rc=%d\n", pdev->irq, rc);
+		} else {
+			lro->irq_line = (int)pdev->irq;
+			//printk("Using IRQ#%d with  MSI_EN=%d \n", pdev->irq,lro->msi_enabled);
+		}
+	}
+
+	return rc;
+}
+
+
+void hws_free_irqs(struct hws_pcie_dev *lro)
+{
+	//int i;
+
+	//BUG_ON(!lro);
+
+	//if (lro->msix_enabled) {
+	//	for (i = 0; i < lro->irq_user_count; i++) {
+	//		printk("Releasing IRQ#%d\n", lro->entry[i].vector);
+	//		free_irq(lro->entry[i].vector, &lro->user_irq[i]);
+	//	}
+	//}
+	//else
+
+	if (lro->irq_line != -1) {
+		//printk("Releasing IRQ#%d\n", lro->irq_line);
+		free_irq(lro->irq_line, lro);
+	}
+}
+
 
 void DpcForIsr_Audio0(unsigned long data)
 {

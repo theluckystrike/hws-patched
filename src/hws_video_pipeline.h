@@ -3,6 +3,7 @@
 
 
 #include <linux/types.h>
+#include "hws.h"
 
 
 void ChangeVideoSize(struct hws_pcie_dev *pdx, int ch, int w, int h, int interlace);
