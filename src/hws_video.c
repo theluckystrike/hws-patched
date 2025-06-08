@@ -1013,18 +1013,6 @@ static const struct vb2_ops hwspcie_video_qops = {
 	.start_streaming = hws_start_streaming,
 	.stop_streaming = hws_stop_streaming,
 };
-//-----------------------------------------
-const unsigned char g_YUVColors[MAX_COLOR][3] = {
-	{ 128, 16, 128 }, // BLACK
-	{ 128, 235, 128 }, // WHITE
-	{ 16, 211, 146 }, // YELLOW
-	{ 166, 170, 16 }, // CYAN
-	{ 54, 145, 34 }, // GREEN
-	{ 202, 106, 222 }, // MAGENTA
-	{ 90, 81, 240 }, // RED
-	{ 240, 41, 109 }, // BLUE
-	{ 128, 125, 128 }, // GREY
-};
 
 
 
@@ -1147,11 +1135,6 @@ fail:
 	return err;
 }
 
-/* HDMI 0x39[3:0] - CS_DATA[27:24] 0 for reserved values*/
-static const int cs_data_fs[] = {
-	44100, 0,      48000, 32000, 0,	     0, 0,	0,
-	88200, 768000, 96000, 0,     176000, 0, 192000, 0,
-};
 int hws_pcie_audio_open(struct snd_pcm_substream *substream)
 {
 	struct hws_audio *drv = snd_pcm_substream_chip(substream);
