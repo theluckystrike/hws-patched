@@ -3,6 +3,15 @@
 
 #include <linux/pci.h>
 
+
+#define MAKE_ENTRY(__vend, __chip, __subven, __subdev, __configptr) \
+	{ .vendor = (__vend),                                       \
+	  .device = (__chip),                                       \
+	  .subvendor = (__subven),                                  \
+	  .subdevice = (__subdev),                                  \
+	  .driver_data = (unsigned long)(__configptr) }
+
+
 int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id);
 void hws_remove(struct pci_dev *pdev);
 struct hws_pcie_dev *alloc_dev_instance(struct pci_dev *pdev);

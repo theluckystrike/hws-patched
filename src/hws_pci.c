@@ -1,5 +1,22 @@
 #include "hws_pci.h"
 
+static const struct pci_device_id hws_pci_table[] = {
+	MAKE_ENTRY(0x8888, 0x9534, 0x8888, 0x0007, NULL),
+	MAKE_ENTRY(0x1F33, 0x8534, 0x8888, 0x0007, NULL),
+	MAKE_ENTRY(0x1F33, 0x8554, 0x8888, 0x0007, NULL),
+	MAKE_ENTRY(0x8888, 0x8524, 0x8888, 0x0007, NULL),
+	MAKE_ENTRY(0x1F33, 0x6524, 0x8888, 0x0007, NULL),
+	MAKE_ENTRY(0x8888, 0x8504, 0x8888, 0x0007, NULL),
+	MAKE_ENTRY(0x8888, 0x6504, 0x8888, 0x0007, NULL),
+	MAKE_ENTRY(0x8888, 0x8532, 0x8888, 0x0007, NULL),
+	MAKE_ENTRY(0x8888, 0x8512, 0x8888, 0x0007, NULL),
+	MAKE_ENTRY(0x8888, 0x8501, 0x8888, 0x0007, NULL),
+	MAKE_ENTRY(0x1F33, 0x6502, 0x8888, 0x0007, NULL),
+	MAKE_ENTRY(0x1F33, 0x8504, 0x8888, 0x0007, NULL),
+	MAKE_ENTRY(0x1F33, 0x8524, 0x8888, 0x0007, NULL),
+
+	{}
+};
 
 int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 {
@@ -501,3 +518,12 @@ u32 READ_REGISTER_ULONG(struct hws_pcie_dev *pdx, u32 RegisterOffset)
 	//return(map_bar0_addr[RegisterOffset/4]);
 	return (ioread32(bar0 + RegisterOffset));
 }
+
+static struct pci_driver hws_pci_driver = {
+	.name = KBUILD_MODNAME,
+	.id_table = hws_pci_table,
+	.probe = hws_probe,
+	.remove = hws_remove,
+};
+
+

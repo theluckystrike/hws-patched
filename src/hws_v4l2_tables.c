@@ -1,0 +1,152 @@
+#include "hws_v4l2_tables.h"
+#include <linux/kernel.h>
+
+const v4l2_model_timing_t support_videofmt[] = {
+	[V4L2_MODEL_VIDEOFORMAT_1920X1080P60] =
+		V4L2_MODEL_TIMING(1920, 1080, 60, 0),
+	[V4L2_MODEL_VIDEOFORMAT_1280X720P60] =
+		V4L2_MODEL_TIMING(1280, 720, 60, 0),
+	[V4L2_MODEL_VIDEOFORMAT_720X480P60] =
+		V4L2_MODEL_TIMING(720, 480, 60, 0),
+	[V4L2_MODEL_VIDEOFORMAT_720X576P50] =
+		V4L2_MODEL_TIMING(720, 480, 50, 0),
+	[V4L2_MODEL_VIDEOFORMAT_800X600P60] =
+		V4L2_MODEL_TIMING(800, 600, 60, 0),
+	[V4L2_MODEL_VIDEOFORMAT_640X480P60] =
+		V4L2_MODEL_TIMING(640, 480, 60, 0),
+	[V4L2_MODEL_VIDEOFORMAT_1024X768P60] =
+		V4L2_MODEL_TIMING(1024, 768, 60, 0),
+	[V4L2_MODEL_VIDEOFORMAT_1280X768P60] =
+		V4L2_MODEL_TIMING(1280, 768, 60, 0),
+	[V4L2_MODEL_VIDEOFORMAT_1280X800P60] =
+		V4L2_MODEL_TIMING(1280, 800, 60, 0),
+	[V4L2_MODEL_VIDEOFORMAT_1280X1024P60] =
+		V4L2_MODEL_TIMING(1280, 1024, 60, 0),
+	[V4L2_MODEL_VIDEOFORMAT_1360X768P60] =
+		V4L2_MODEL_TIMING(1360, 768, 60, 0),
+	[V4L2_MODEL_VIDEOFORMAT_1440X900P60] =
+		V4L2_MODEL_TIMING(1440, 900, 60, 0),
+	[V4L2_MODEL_VIDEOFORMAT_1680X1050P60] =
+		V4L2_MODEL_TIMING(1680, 1050, 60, 0),
+	[V4L2_MODEL_VIDEOFORMAT_1080X1920P60] =
+		V4L2_MODEL_TIMING(1080, 1920, 60, 0),
+#if 0
+    [V4L2_MODEL_VIDEOFORMAT_1920X1200P60]	= V4L2_MODEL_TIMING(1920,1200,60,0),
+    [V4L2_MODEL_VIDEOFORMAT_2560X1080P60]	= V4L2_MODEL_TIMING(2560,1080,60,0),
+    [V4L2_MODEL_VIDEOFORMAT_2560X1440P60]	= V4L2_MODEL_TIMING(2560,1440,60,0),
+    [V4L2_MODEL_VIDEOFORMAT_3840X2160P60]	= V4L2_MODEL_TIMING(3840,2160,60,0),
+    [V4L2_MODEL_VIDEOFORMAT_4096X2160P60]	= V4L2_MODEL_TIMING(4096,2160,60,0),
+#endif
+};
+
+const size_t support_videofmt_count =
+    ARRAY_SIZE(support_videofmt);
+
+
+const framegrabber_pixfmt_t support_pixfmts[] = {
+	
+	[FRAMEGRABBER_PIXFMT_YUYV]={ //YUYV index=0
+		.name     = "4:2:2, packed, YUYV",
+		.fourcc   = V4L2_PIX_FMT_YUYV,
+		.depth    = 16,
+		.is_yuv   = true,
+		.pixfmt_out = YUYV,
+	},
+#if 0
+	[FRAMEGRABBER_PIXFMT_UYVY]={ //UYVY
+		.name     = "4:2:2, packed, UYVY",
+		.fourcc   = V4L2_PIX_FMT_UYVY,
+		.depth    = 16,
+		.is_yuv   = true,
+		.pixfmt_out = UYVY,
+	},
+	[FRAMEGRABBER_PIXFMT_YVYU]={ //YVYU
+		.name     = "4:2:2, packed, YVYU",
+		.fourcc   = V4L2_PIX_FMT_YVYU,
+		.depth    = 16,
+		.is_yuv   = true,
+		.pixfmt_out = YVYU,
+	},
+	
+	[FRAMEGRABBER_PIXFMT_VYUY]={ //VYUY
+		.name     = "4:2:2, packed, VYUY",
+		.fourcc   = V4L2_PIX_FMT_VYUY,
+		.depth    = 16,
+		.is_yuv   = true,
+		.pixfmt_out = VYUY,
+	},
+
+	[FRAMEGRABBER_PIXFMT_RGB565]={ //RGBP
+		.name     = "RGB565 (LE)",
+		.fourcc   = V4L2_PIX_FMT_RGB565, /* gggbbbbb rrrrrggg */
+		.depth    = 16,
+		.is_yuv   = false,
+		.pixfmt_out = RGBP,
+	},
+	[FRAMEGRABBER_PIXFMT_RGB565X]={ //RGBR
+		.name     = "RGB565 (BE)",
+		.fourcc   = V4L2_PIX_FMT_RGB565X, /* rrrrrggg gggbbbbb */
+		.depth    = 16,
+		.is_yuv   = false,
+		.pixfmt_out = RGBR,
+	},
+	[FRAMEGRABBER_PIXFMT_RGB555]={ //RGBO
+		.name     = "RGB555 (LE)",
+		.fourcc   = V4L2_PIX_FMT_RGB555, /* gggbbbbb arrrrrgg */
+		.depth    = 16,
+		.is_yuv   = false,
+		.pixfmt_out = RGBO,
+	},
+	[FRAMEGRABBER_PIXFMT_RGB555X]={ //RGBQ
+		.name     = "RGB555 (BE)",
+		.fourcc   = V4L2_PIX_FMT_RGB555X, /* arrrrrgg gggbbbbb */
+		.depth    = 16,
+		.is_yuv   = false,
+		.pixfmt_out = RGBQ,
+	},
+	[FRAMEGRABBER_PIXFMT_RGB24]={ //RGB3 index=8
+		.name     = "RGB24 (LE)",
+		.fourcc   = V4L2_PIX_FMT_RGB24, /* rgb */
+		.depth    = 24,
+		.is_yuv   = false,
+		.pixfmt_out = RGB3,
+	},
+
+	[FRAMEGRABBER_PIXFMT_BGR24]={ //BGR3
+		.name     = "RGB24 (BE)",
+		.fourcc   = V4L2_PIX_FMT_BGR24, /* bgr */
+		.depth    = 24,
+		.is_yuv   = false,
+		.pixfmt_out = BGR3,
+	},
+	[FRAMEGRABBER_PIXFMT_RGB32]={ //RGB4
+		.name     = "RGB32 (LE)",
+		.fourcc   = V4L2_PIX_FMT_RGB32, /* argb */
+		.depth    = 32,
+		.is_yuv   = false,
+		.pixfmt_out = RGB4,
+	},
+	[FRAMEGRABBER_PIXFMT_BGR32]={ //BGR4
+		.name     = "RGB32 (BE)",
+		.fourcc   = V4L2_PIX_FMT_BGR32, /* bgra */
+		.depth    = 32,
+		.is_yuv   = false,
+		.pixfmt_out = BGR4,
+	},
+#endif
+};
+
+const size_t support_pixfmts_count =
+    ARRAY_SIZE(support_pixfmts);
+
+const int framegrabber_support_refreshrate[] = {
+	[REFRESHRATE_15] = 15,	 [REFRESHRATE_24] = 24,
+	[REFRESHRATE_25] = 25,	 [REFRESHRATE_30] = 30,
+	[REFRESHRATE_50] = 50,	 [REFRESHRATE_60] = 60,
+	[REFRESHRATE_100] = 100, [REFRESHRATE_120] = 120,
+	[REFRESHRATE_144] = 144, [REFRESHRATE_240] = 240,
+};
+
+const size_t framegrabber_support_refreshrate_count =
+    ARRAY_SIZE(framegrabber_support_refreshrate);
+

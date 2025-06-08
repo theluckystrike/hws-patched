@@ -1,6 +1,29 @@
 #include "hws_scaler.h"
 
 
+static void SetNoVideoMem(uint8_t *pDest, int w, int h)
+{
+	int x, y;
+	uint8_t *pST;
+	uint8_t *pNS;
+	pST = (uint8_t *)pDest;
+	//printk("SetNoVideoMem[%d-%d]\n",w,h);
+
+	for (x = 0; x < w / 2; x++) {
+		pST[0] = 41;
+		pST[1] = 240;
+		pST[2] = 41;
+		pST[3] = 109;
+		pST += 4;
+	}
+
+	pNS = pDest + w * 2;
+	for (y = 1; y < h; y++) {
+		memcpy(pNS, pDest, w * 2);
+		pNS = pNS + w * 2;
+	}
+}
+
 static void All_VideoScaler(BYTE *pSrc, BYTE *pOut, int in_w, int in_h,
 			    int out_w, int out_h)
 {
