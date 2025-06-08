@@ -18,6 +18,7 @@ import os
 import subprocess
 import sys
 import time
+from argparse import ArgumentParser
 from pathlib import Path
 from typing import List, Tuple
 
@@ -80,7 +81,12 @@ KNOWN_OFFSETS = {
     # OUT_FRAME_RATE (ch0-3)
     0x4100, 0x4180, 0x4200, 0x4280,
 }
-
+# additional “candidate” words whose *change* means “hot-plug happened”.
+HOTPLUG_CANDIDATES = {
+    5 * BAR_STRIDE,   # ACTIVE_STATUS   (signal present / interlace)
+    8 * BAR_STRIDE,   # HDCP_STATUS     (HDCP auth often rises with 5 V)
+    1 * BAR_STRIDE,   # INT_STATUS      (done flags often spike)
+}
 # ───── Helpers ──────────────────────────────────────────────────────────────
 def read_bar0() -> bytes:
     with open(BAR0_PATH, "rb") as f:
@@ -101,6 +107,11 @@ def diff_words(base: bytes, cur: bytes) -> List[Tuple[int, int, int]]:
         if b != c:
             diffs.append((off, b, c))
     return diffs
+
+
+
+def format_hex(val: int) -> str:
+    return f"0x{val:08X}"
 
 
 def mode_to_modetest_arg(mode: str) -> str:
@@ -131,48 +142,75 @@ def hex32(val: int) -> str:
     return f"0x{val:08X}"
 
 
-# ───── Main loop ────────────────────────────────────────────────────────────
-def main():
-    if os.geteuid() != 0:
-        sys.exit("This script must be run as root.")
+# ───── Hot-plug watch mode ────────────────────────────────────────────────
+def hotplug_watch(poll_ms: int = 100):
+    print("[hot-plug] Take baseline with **cable UN-plugged**, then insert the"
+          " HDMI cable…")
+    baseline = read_bar0()
 
-    if not Path(BAR0_PATH).exists():
-        sys.exit(f"{BAR0_PATH} not found – check PCI address?")
+    while True:
+        cur   = read_bar0()
+        diffs = diff_words(baseline, cur)
+        print(diffs)
 
-    print(f"[+] Reading baseline BAR0 ({BAR0_SIZE // 1024} KiB) …")
+        # any candidate offset changed?
+        trig = [d for d in diffs if d[0] in HOTPLUG_CANDIDATES]
+        if trig:
+            print("\n[hot-plug] Event detected!")
+            for off, old, new in trig:
+                print(f"  Offset {format_hex(off)}: {format_hex(old)} → "
+                      f"{format_hex(new)}  ({'known' if off in KNOWN_OFFSETS else 'UNKNOWN!'})")
+            print("\nDone.")
+            return
+
+        time.sleep(poll_ms / 1000)
+
+# ───── Original mode-sweep loop-back test ─────────────────────────────────
+def loopback_modes():
+    print(f"[+] Reading baseline BAR0 ({BAR0_SIZE//1024} KiB)…")
     baseline = read_bar0()
     print("[+] Baseline captured, starting test loop\n")
 
     for i, mode in enumerate(MODES, 1):
         print(f"─── [{i}/{len(MODES)}] Mode {mode} ─────────────────────────")
 
-        try:
-            set_mode(mode)
-        except subprocess.CalledProcessError:
-            print(f"  !! Could not set mode {mode} with modetest")
+        try:               set_mode(mode)
+        except Exception as e:
+            print(f"  !! modetest failed: {e}")
             continue
 
-        time.sleep(0.5)             # little settle time
+        time.sleep(0.5)
+        try:               capture_one_second()
+        except Exception:  pass
 
-        try:
-            capture_one_second()
-        except subprocess.CalledProcessError:
-            print("  !! ffmpeg capture failed – continuing.")
-
-        current = read_bar0()
-        diffs   = diff_words(baseline, current)
-
-        unknown = [(o, b, c) for (o, b, c) in diffs if o not in KNOWN_OFFSETS]
+        cur     = read_bar0()
+        unknown = [(o,b,c) for (o,b,c) in diff_words(baseline, cur)
+                   if o not in KNOWN_OFFSETS]
 
         if not unknown:
             print("  No *unknown* register changes.\n")
         else:
             for off, old, new in unknown:
-                print(f"  Offset {hex32(off)}: {hex32(old)} -> {hex32(new)}")
-            print(f"  Changed words not yet in hws_reg.h: {len(unknown)}\n")
+                print(f"  Offset {format_hex(off)}: {format_hex(old)} → "
+                      f"{format_hex(new)}")
+            print(f"  Changed *unknown* words: {len(unknown)}\n")
 
     print("== Test loop complete ==")
 
+# ───── entry-point ────────────────────────────────────────────────────────
+def main():
+    if os.geteuid() != 0:
+        sys.exit("Run as root please (BAR access & modetest)")
+
+    ap = ArgumentParser()
+    ap.add_argument("--hotplug", action="store_true",
+                    help="wait for a 5-V hot-plug and report which registers changed")
+    args = ap.parse_args()
+
+    if args.hotplug:
+        hotplug_watch()
+    else:
+        loopback_modes()
 
 if __name__ == "__main__":
     main()
