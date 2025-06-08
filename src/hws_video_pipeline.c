@@ -1,6 +1,34 @@
 #include "hws_video_pipeline.h"
 
 
+int SetVideoFormatSize(struct hws_pcie_dev *pdx, int ch, int w, int h)
+{
+	int hf_size;
+	int down_size;
+	//int frame_size;
+	//int buf_cnt;
+
+	if (pdx->m_Device_SupportYV12 == 0) {
+		hf_size = (w * h) / (16 * 128);
+		hf_size = hf_size * 16 * 128;
+		down_size = (w * h * 2) - hf_size;
+	} else if (pdx->m_Device_SupportYV12 == 1) {
+		hf_size = (w * h * 12) / (16 * 16 * 128);
+		hf_size = hf_size * 16 * 128;
+		down_size = ((w * h * 12) / 8) - hf_size;
+	} else {
+		hf_size = (w * h * 5) / (8 * 16 * 128);
+		hf_size = hf_size * 16 * 128;
+		down_size = ((w * h * 5) / 4) - hf_size;
+	}
+	pdx->m_format[ch].dwWidth = w; // Image Width
+	pdx->m_format[ch].dwWidth = w; // Image Width
+	pdx->m_format[ch].HLAF_SIZE = hf_size;
+	pdx->m_format[ch].DWON_SIZE = down_size;
+	//DbgPrint("[MV-X1]-CH0 SetVideoFormteSize = %d %d \n",m_format[ch].HLAF_SIZE,m_format[ch].DWON_SIZE);
+
+	return 1;
+}
 void ChangeVideoSize(struct hws_pcie_dev *pdx, int ch, int w, int h,
 			    int interlace)
 {

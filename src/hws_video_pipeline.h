@@ -9,6 +9,7 @@
 void ChangeVideoSize(struct hws_pcie_dev *pdx, int ch, int w, int h, int interlace);
 int CheckVideoCapture(struct hws_pcie_dev *pdx, int index);
 void EnableVideoCapture(struct hws_pcie_dev *pdx, int index, int en);
+int SetVideoFormatSize(struct hws_pcie_dev *pdx, int ch, int w, int h)
 
 int StartVideoCapture(struct hws_pcie_dev *pdx, int index);
 void StopVideoCapture(struct hws_pcie_dev *pdx, int index);

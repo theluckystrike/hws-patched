@@ -1,3 +1,49 @@
+#include "hws_init.h"
+#include "hws_reg.h"
+#include "hws_pci.h"
+#include "hws_video_pipeline.h"
+#include "hws_audio_pipeline.h"
+#include "hws_video.h"
+
+static void StopDsp(struct hws_pcie_dev *pdx)
+{
+	//int j, i;
+	u32 statusreg;
+	statusreg = READ_REGISTER_ULONG(pdx, HWS_REG_DEC_MODE);
+	printk("[MV] Busy!!! statusreg =%X\n", statusreg);
+	if (statusreg == 0xFFFFFFFF) {
+		return;
+	}
+	WRITE_REGISTER_ULONG(pdx, HWS_REG_DEC_MODE, 0x10);
+	Check_Busy(pdx);
+	WRITE_REGISTER_ULONG(pdx, HWS_REG_VCAP_ENABLE, 0x00);
+}
+
+//----------------------------------------------
+static int Check_Busy(struct hws_pcie_dev *pdx)
+{
+	u32 statusreg;
+	u32 TimeOut = 0;
+	//DbgPrint(("Check Busy in !!!\n"));
+	//WRITE_REGISTER_ULONG((u32)(0x4000), 0x10);
+	while (1) {
+		statusreg = READ_REGISTER_ULONG(pdx, HWS_REG_SYS_STATUS);
+		printk("[MV] Check_Busy!!! statusreg =%X\n", statusreg);
+		if (statusreg == 0xFFFFFFFF) {
+			break;
+		}
+		if ((statusreg & HWS_SYS_DMA_BUSY_BIT) == 0) {
+			break;
+		}
+		TimeOut++;
+		msleep(10);
+	}
+	//WRITE_REGISTER_ULONG((u32)(0x4000), 0x10);
+
+	//DbgPrint(("Check Busy out !!!\n"));
+
+	return 0;
+}
 
 int ReadChipId(struct hws_pcie_dev *pdx)
 {
@@ -42,7 +88,7 @@ int ReadChipId(struct hws_pcie_dev *pdx)
 
 	//--------
 	for (i = 0; i < MAX_VID_CHANNELS; i++) {
-		SetVideoFormteSize(pdx, i, 1920, 1080);
+		SetVideoFormatSize(pdx, i, 1920, 1080);
 	}
 	//-------
 	WRITE_REGISTER_ULONG(pdx, HWS_REG_DEC_MODE, 0x0);

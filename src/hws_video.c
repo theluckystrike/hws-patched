@@ -417,75 +417,9 @@ fail:
 
 
 
-//----------------------------------------------
-static int Check_Busy(struct hws_pcie_dev *pdx)
-{
-	u32 statusreg;
-	u32 TimeOut = 0;
-	//DbgPrint(("Check Busy in !!!\n"));
-	//WRITE_REGISTER_ULONG((u32)(0x4000), 0x10);
-	while (1) {
-		statusreg = READ_REGISTER_ULONG(pdx, HWS_REG_SYS_STATUS);
-		printk("[MV] Check_Busy!!! statusreg =%X\n", statusreg);
-		if (statusreg == 0xFFFFFFFF) {
-			break;
-		}
-		if ((statusreg & HWS_SYS_DMA_BUSY_BIT) == 0) {
-			break;
-		}
-		TimeOut++;
-		msleep(10);
-	}
-	//WRITE_REGISTER_ULONG((u32)(0x4000), 0x10);
-
-	//DbgPrint(("Check Busy out !!!\n"));
-
-	return 0;
-}
-
-static void StopDsp(struct hws_pcie_dev *pdx)
-{
-	//int j, i;
-	u32 statusreg;
-	statusreg = READ_REGISTER_ULONG(pdx, HWS_REG_DEC_MODE);
-	printk("[MV] Busy!!! statusreg =%X\n", statusreg);
-	if (statusreg == 0xFFFFFFFF) {
-		return;
-	}
-	WRITE_REGISTER_ULONG(pdx, HWS_REG_DEC_MODE, 0x10);
-	Check_Busy(pdx);
-	WRITE_REGISTER_ULONG(pdx, HWS_REG_VCAP_ENABLE, 0x00);
-}
 
 
-int SetVideoFormatSize(struct hws_pcie_dev *pdx, int ch, int w, int h)
-{
-	int hf_size;
-	int down_size;
-	//int frame_size;
-	//int buf_cnt;
 
-	if (pdx->m_Device_SupportYV12 == 0) {
-		hf_size = (w * h) / (16 * 128);
-		hf_size = hf_size * 16 * 128;
-		down_size = (w * h * 2) - hf_size;
-	} else if (pdx->m_Device_SupportYV12 == 1) {
-		hf_size = (w * h * 12) / (16 * 16 * 128);
-		hf_size = hf_size * 16 * 128;
-		down_size = ((w * h * 12) / 8) - hf_size;
-	} else {
-		hf_size = (w * h * 5) / (8 * 16 * 128);
-		hf_size = hf_size * 16 * 128;
-		down_size = ((w * h * 5) / 4) - hf_size;
-	}
-	pdx->m_format[ch].dwWidth = w; // Image Width
-	pdx->m_format[ch].dwWidth = w; // Image Width
-	pdx->m_format[ch].HLAF_SIZE = hf_size;
-	pdx->m_format[ch].DWON_SIZE = down_size;
-	//DbgPrint("[MV-X1]-CH0 SetVideoFormteSize = %d %d \n",m_format[ch].HLAF_SIZE,m_format[ch].DWON_SIZE);
-
-	return 1;
-}
 
 
 void StopKSThread(struct hws_pcie_dev *pdx)
