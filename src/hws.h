@@ -339,6 +339,7 @@ struct hws_video{
 
 	struct v4l2_ctrl_handler ctrl_handler;
 	struct v4l2_ctrl *detect_tx_5v_ctrl;
+	struct v4l2_ctrl *hpd_ctrl;
 	struct v4l2_ctrl *content_type;
 };
 	

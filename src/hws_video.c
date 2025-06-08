@@ -1039,16 +1039,23 @@ static int hws_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 {
 	struct hws_video *vid =
 		container_of(ctrl->handler, struct hws_video, ctrl_handler);
+	struct hws_pcie_dev *pdx = vid->dev;          /* if you keep this ptr */
 
 	switch (ctrl->id) {
 	case V4L2_CID_DV_RX_POWER_PRESENT:
-		/* Read hardware to detect 5 V presence on the HDMI RX */
-		ctrl->val = hdmi_5v_detect(vid);
+		/* bit 3 (+5 V) over the two pipes for this HDMI port           */
+		ctrl->val = !!(hws_read_port_hpd(pdx, vid->port) & HWS_5V_BIT);
 		return 0;
 
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(6, 8, 0))
+	case V4L2_CID_DV_RX_HOTPLUG_PRESENT:
+		/* bit 0 (HPD) */
+		ctrl->val = !!(hws_read_port_hpd(pdx, vid->port) & HWS_HPD_BIT);
+		return 0;
+#endif
+
 	case V4L2_CID_DV_RX_IT_CONTENT_TYPE:
-		/* Read hardware to determine IT content type */
-		ctrl->val = hdmi_content_type(vid);
+		ctrl->val = hdmi_content_type(vid);       /* unchanged */
 		return 0;
 
 	default:
@@ -4926,6 +4933,21 @@ static int Get_Video_Status(struct hws_pcie_dev *pdx, unsigned int ch)
 	u8   br, co, hu, sa;
 	int  out_val;
 
+    /* ── 0. HPD / +5 V status ------------------------------------------------- */
+    {
+        u32 hpd = hws_read_port_hpd(pdx, ch);  /* ch == HDMI jack index */
+        bool power = !!(hpd & HWS_5V_BIT);
+        bool hpd_hi = !!(hpd & HWS_HPD_BIT);
+
+        /* cache & push to ctrl core only on change */
+        if (power != vid->detect_tx_5v_ctrl->cur.val) {
+            v4l2_ctrl_s_ctrl(vid->detect_tx_5v_ctrl, power);
+        }
+        if (hpd_hi != vid->hpd_ctrl->cur.val) {
+            v4l2_ctrl_s_ctrl(vid->hpd_ctrl, hpd_hi);
+        }
+    }
+
 	/* ── 1. signal present / interlace flags ─────────────────────────── */
 	reg          = READ_REGISTER_ULONG(pdx, HWS_REG_ACTIVE_STATUS);
 	active_video = (reg >> ch) & 0x01;
@@ -5485,7 +5507,7 @@ static int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 		struct v4l2_ctrl_handler *hdl = &vid->ctrl_handler;
 
 		/* 1. Allocate the per-device control handler (room for 2 controls) */
-		v4l2_ctrl_handler_init(hdl, 2);
+		v4l2_ctrl_handler_init(hdl, 3);
 
 		/* 2. Create the “5-V detect” boolean (volatile) */
 		vid->detect_tx_5v_ctrl = v4l2_ctrl_new_std(
@@ -5495,7 +5517,14 @@ static int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 		vid->detect_tx_5v_ctrl->flags |= V4L2_CTRL_FLAG_VOLATILE |
 						 V4L2_CTRL_FLAG_READ_ONLY;
 
-		/* 3. Create the “IT content-type” enum (volatile) */
+		/* 3. “Hot-plug detect” boolean (volatile, read-only) */
+		vid->hpd_ctrl = v4l2_ctrl_new_std(
+			hdl, &hws_ctrl_ops, V4L2_CID_DV_RX_HOTPLUG_PRESENT,
+			0, 1, 1, 0);
+		vid->hpd_ctrl->flags |=
+			V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_READ_ONLY;
+
+		/* 4. Create the “IT content-type” enum (volatile) */
 		vid->content_type = v4l2_ctrl_new_std(
 			hdl, &hws_ctrl_ops, V4L2_CID_DV_RX_IT_CONTENT_TYPE,
 			V4L2_DV_IT_CONTENT_TYPE_NO_ITC,
@@ -5507,7 +5536,7 @@ static int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 
 		v4l2_ctrl_handler_setup(hdl);
 
-		/* 4. Bail out cleanly if ctrl creation failed */
+		/* 5. Bail out cleanly if ctrl creation failed */
 		if (hdl->error) {
 			ret = hdl->error;
 			dev_err(&pdev->dev,
