@@ -154,3 +154,7 @@ static int hws_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 		return -EINVAL;
 	}
 }
+
+const struct v4l2_ctrl_ops hws_ctrl_ops = {
+	.g_volatile_ctrl = hws_g_volatile_ctrl,
+};

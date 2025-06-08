@@ -165,7 +165,7 @@ int MemCopyAudioToSteam(struct hws_pcie_dev *pdx, int dwAudioCh)
 	return 0;
 }
 
-int SetAudioQuene(struct hws_pcie_dev *pdx, int dwAudioCh)
+int SetAudioQueue(struct hws_pcie_dev *pdx, int dwAudioCh)
 {
 	int status = -1;
 	//int i;

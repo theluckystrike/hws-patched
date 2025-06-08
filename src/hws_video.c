@@ -121,9 +121,6 @@ static const struct v4l2_ioctl_ops hws_ioctl_fops = {
 	.vidioc_s_parm = hws_vidioc_s_parm,
 };
 
-const struct v4l2_ctrl_ops hws_ctrl_ops = {
-	.g_volatile_ctrl = hws_g_volatile_ctrl,
-};
 
 static int hws_queue_setup(struct vb2_queue *q, unsigned int *num_buffers,
 			   unsigned int *num_planes, unsigned int sizes[],
@@ -461,7 +458,7 @@ static void StopDsp(struct hws_pcie_dev *pdx)
 }
 
 
-static int SetVideoFormteSize(struct hws_pcie_dev *pdx, int ch, int w, int h)
+int SetVideoFormatSize(struct hws_pcie_dev *pdx, int ch, int w, int h)
 {
 	int hf_size;
 	int down_size;
@@ -501,35 +498,6 @@ void StopKSThread(struct hws_pcie_dev *pdx)
 //----------------------------
 
 
-static int SetQuene(struct hws_pcie_dev *pdx, int nDecoder)
-{
-	int status = -1;
-	//KLOCK_QUEUE_HANDLE  oldirql;
-	//DbgPrint("SetQuene %d",nDecoder);
-	if (!pdx->m_bStartRun) {
-		return -1;
-	}
-	if (!pdx->m_bVCapStarted[nDecoder]) {
-		if (pdx->m_bVideoStop[nDecoder] == 1) {
-			pdx->m_bVideoStop[nDecoder] = 0;
-			//DbgPrint("KeSetEvent Exit Event[%d]\n",nDecoder);
-		}
-
-		return -1;
-	}
-	//-------------------
-	if (pdx->m_DeviceHW_Version == 0) {
-		pdx->m_dwSWFrameRate[nDecoder]++;
-	}
-	//-------------------
-	pdx->m_nVideoBusy[nDecoder] = 1;
-	//-------------------------------
-	if (pdx->m_bVCapStarted[nDecoder] == TRUE) {
-		status = MemCopyVideoToSteam(pdx, nDecoder);
-	}
-	pdx->m_nVideoBusy[nDecoder] = 0;
-	return status;
-}
 
 
 
@@ -561,7 +529,7 @@ int MainKsThreadHandle(void *arg)
 	//printk("MainKsThreadHandle Exit");
 	return 0;
 }
-static void StartKSThread(struct hws_pcie_dev *pdx)
+void StartKSThread(struct hws_pcie_dev *pdx)
 {
 	pdx->mMain_tsk = kthread_run(MainKsThreadHandle, (void *)pdx,
 				     "StartKSThread task");

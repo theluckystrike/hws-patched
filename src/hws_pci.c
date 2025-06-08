@@ -1,7 +1,15 @@
 #include "hws_pci.h"
+
+#include <media/v4l2-ctrls.h>
+
 #include "hws.h"
 #include "hws_init.h"
+#include "hws_dma.h"
+#include "hws_v4l2_ctrl.h"
+#include "hws_video_pipeline.h"
+#include "hws_audio_pipeline.h"
 #include "hws_interrupt.h"
+#include "hws_video.h"
 
 static const struct pci_device_id hws_pci_table[] = {
 	MAKE_ENTRY(0x8888, 0x9534, 0x8888, 0x0007, NULL),
@@ -125,7 +133,7 @@ int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 		struct v4l2_ctrl_handler *hdl = &vid->ctrl_handler;
 
 		/* 1. Allocate the per-device control handler (room for 2 controls) */
-		v4l2_ctrl_handler_init(hdl, 3);
+		v4l2_ctrl_handler_init(hdl, 2);
 
 		/* 2. Create the “5-V detect” boolean (volatile) */
 		vid->detect_tx_5v_ctrl = v4l2_ctrl_new_std(
@@ -135,12 +143,6 @@ int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 		vid->detect_tx_5v_ctrl->flags |= V4L2_CTRL_FLAG_VOLATILE |
 						 V4L2_CTRL_FLAG_READ_ONLY;
 
-		/* 3. “Hot-plug detect” boolean (volatile, read-only) */
-		vid->hpd_ctrl = v4l2_ctrl_new_std(
-			hdl, &hws_ctrl_ops, V4L2_CID_DV_RX_HOTPLUG_PRESENT, 0,
-			1, 1, 0);
-		vid->hpd_ctrl->flags |= V4L2_CTRL_FLAG_VOLATILE |
-					V4L2_CTRL_FLAG_READ_ONLY;
 
 		/* 4. Create the “IT content-type” enum (volatile) */
 		vid->content_type = v4l2_ctrl_new_std(
@@ -171,7 +173,7 @@ int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 	gdev->m_nVideoBufferIndex[i] = 0;
 	gdev->m_nVideoHalfDone[i] = 0;
 	gdev->m_pVideoEvent[i] = 0;
-	SetVideoFormteSize(gdev, i, 1920, 1080);
+	SetVideoFormatSize(gdev, i, 1920, 1080);
 	gdev->m_bVCapStarted[i] = 0;
 	gdev->m_bVideoStop[i] = 0;
 	gdev->video_data[i] = 0;

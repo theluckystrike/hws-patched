@@ -225,9 +225,6 @@ int Get_Video_Status(struct hws_pcie_dev *pdx, unsigned int ch)
 		if (power != vid->detect_tx_5v_ctrl->cur.val) {
 			v4l2_ctrl_s_ctrl(vid->detect_tx_5v_ctrl, power);
 		}
-		if (hpd_hi != vid->hpd_ctrl->cur.val) {
-			v4l2_ctrl_s_ctrl(vid->hpd_ctrl, hpd_hi);
-		}
 	}
 
 	/* ── 1. signal present / interlace flags ─────────────────────────── */

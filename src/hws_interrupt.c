@@ -1,5 +1,37 @@
 #include "hws_interrupt.h"
+#include "hws_pci.h"
+#include "hws_reg.h"
+#include "hws_audio_pipeline.h"
 
+static int SetQueue(struct hws_pcie_dev *pdx, int nDecoder)
+{
+	int status = -1;
+	//KLOCK_QUEUE_HANDLE  oldirql;
+	//DbgPrint("SetQueue %d",nDecoder);
+	if (!pdx->m_bStartRun) {
+		return -1;
+	}
+	if (!pdx->m_bVCapStarted[nDecoder]) {
+		if (pdx->m_bVideoStop[nDecoder] == 1) {
+			pdx->m_bVideoStop[nDecoder] = 0;
+			//DbgPrint("KeSetEvent Exit Event[%d]\n",nDecoder);
+		}
+
+		return -1;
+	}
+	//-------------------
+	if (pdx->m_DeviceHW_Version == 0) {
+		pdx->m_dwSWFrameRate[nDecoder]++;
+	}
+	//-------------------
+	pdx->m_nVideoBusy[nDecoder] = 1;
+	//-------------------------------
+	if (pdx->m_bVCapStarted[nDecoder] == TRUE) {
+		status = MemCopyVideoToSteam(pdx, nDecoder);
+	}
+	pdx->m_nVideoBusy[nDecoder] = 0;
+	return status;
+}
 
 int hws_irq_setup(struct hws_pcie_dev *lro, struct pci_dev *pdev)
 {
@@ -144,7 +176,7 @@ void DpcForIsr_Audio0(unsigned long data)
 	//unsigned long *pdata = (unsigned long *)data;
 	//curr_buf_index = *pdata;
 	index = 0;
-	SetAudioQuene(pdx, index);
+	SetAudioQueue(pdx, index);
 }
 
 void DpcForIsr_Audio1(unsigned long data)
@@ -156,7 +188,7 @@ void DpcForIsr_Audio1(unsigned long data)
 	//unsigned long *pdata = (unsigned long *)data;
 	//curr_buf_index = *pdata;
 	index = 1;
-	SetAudioQuene(pdx, index);
+	SetAudioQueue(pdx, index);
 }
 
 void DpcForIsr_Audio2(unsigned long data)
@@ -168,7 +200,7 @@ void DpcForIsr_Audio2(unsigned long data)
 	//unsigned long *pdata = (unsigned long *)data;
 	//curr_buf_index = *pdata;
 	index = 2;
-	SetAudioQuene(pdx, index);
+	SetAudioQueue(pdx, index);
 }
 
 void DpcForIsr_Audio3(unsigned long data)
@@ -180,7 +212,7 @@ void DpcForIsr_Audio3(unsigned long data)
 	//unsigned long *pdata = (unsigned long *)data;
 	//curr_buf_index = *pdata;
 	index = 3;
-	SetAudioQuene(pdx, index);
+	SetAudioQueue(pdx, index);
 }
 
 void DpcForIsr_Video0(unsigned long data)
@@ -194,7 +226,7 @@ void DpcForIsr_Video0(unsigned long data)
 	//unsigned long *pdata = (unsigned long *)data;
 	//curr_buf_index = *pdata;
 	//printk("DpcForIsr_Video0\n");
-	ret = SetQuene(pdx, i);
+	ret = SetQueue(pdx, i);
 	//printk("[%X] pdx->m_bVCapStarted[i]=%d  ret=%d\n", pdx->pdev->device,pdx->m_bVCapStarted[i],ret);
 	if (ret != 0) {
 		return;
@@ -232,7 +264,7 @@ void DpcForIsr_Video1(unsigned long data)
 	//unsigned long *pdata = (unsigned long *)data;
 	//curr_buf_index = *pdata;
 
-	ret = SetQuene(pdx, i);
+	ret = SetQueue(pdx, i);
 	if (ret != 0) {
 		return;
 	}
@@ -265,7 +297,7 @@ void DpcForIsr_Video2(unsigned long data)
 	pdx = (struct hws_pcie_dev *)data;
 	//unsigned long *pdata = (unsigned long *)data;
 	//curr_buf_index = *pdata;
-	ret = SetQuene(pdx, i);
+	ret = SetQueue(pdx, i);
 	if (ret != 0) {
 		return;
 	}
@@ -301,7 +333,7 @@ void DpcForIsr_Video3(unsigned long data)
 	//mutex_lock(&pdx->video_mutex[i]);
 	//printk("DpcForIsr_Video3 data = [%d]%d \n",i,curr_buf_index);
 
-	ret = SetQuene(pdx, i);
+	ret = SetQueue(pdx, i);
 	if (ret != 0) {
 		//spin_unlock(&pdx->video_lock[i]);
 		//mutex_unlock(&pdx->video_mutex[i]);
