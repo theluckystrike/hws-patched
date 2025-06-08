@@ -1,4 +1,7 @@
 #include "hws_pci.h"
+#include "hws.h"
+#include "hws_init.h"
+#include "hws_interrupt.h"
 
 static const struct pci_device_id hws_pci_table[] = {
 	MAKE_ENTRY(0x8888, 0x9534, 0x8888, 0x0007, NULL),
@@ -300,16 +303,6 @@ err_alloc:
 	return -1;
 }
 
-int __init pcie_hws_init(void)
-{
-	return pci_register_driver(&hws_pci_driver);
-}
-
-void __exit pcie_hws_exit(void)
-{
-	pci_unregister_driver(&hws_pci_driver);
-}
-
 void hws_remove(struct pci_dev *pdev)
 {
 	int i;
@@ -432,7 +425,7 @@ static void __devinit enable_pcie_relaxed_ordering(struct pci_dev *dev)
 //--------------------------------------
 
 /* type = PCI_CAP_ID_MSI or PCI_CAP_ID_MSIX */
-int msi_msix_capable(struct pci_dev *dev, int type)
+static int msi_msix_capable(struct pci_dev *dev, int type)
 {
 	struct pci_bus *bus;
 	int ret;
@@ -461,7 +454,7 @@ int msi_msix_capable(struct pci_dev *dev, int type)
 	return 1;
 }
 
-int probe_scan_for_msi(struct hws_pcie_dev *lro, struct pci_dev *pdev)
+static int probe_scan_for_msi(struct hws_pcie_dev *lro, struct pci_dev *pdev)
 {
 	//int i;
 	int rc = 0;
@@ -526,4 +519,14 @@ static struct pci_driver hws_pci_driver = {
 	.remove = hws_remove,
 };
 
+
+int __init pcie_hws_init(void)
+{
+	return pci_register_driver(&hws_pci_driver);
+}
+
+void __exit pcie_hws_exit(void)
+{
+	pci_unregister_driver(&hws_pci_driver);
+}
 

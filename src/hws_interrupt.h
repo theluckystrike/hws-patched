@@ -1,8 +1,8 @@
 #ifndef HWS_INTERRUPT_H
 #define HWS_INTERRUPT_H
 
-#include <linux/pci.h>              /* struct pci_dev */
-#include "hws_common.h"             /* struct hws_pcie_dev */
+#include <linux/pci.h>
+#include "hws.h"
 
 /**
  * hws_request_irqs() – allocate and register all IRQs and threaded handlers

@@ -1,7 +1,7 @@
 #ifndef HWS_INIT_H
 #define HWS_INIT_H
 
-#include "hws_common.h"
+#include "hws.h"
 
 int ReadChipId(struct hws_pcie_dev *pdx);
 void SetHardWareInfo(struct hws_pcie_dev *pdx);

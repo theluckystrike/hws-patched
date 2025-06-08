@@ -121,7 +121,7 @@ static const struct v4l2_ioctl_ops hws_ioctl_fops = {
 	.vidioc_s_parm = hws_vidioc_s_parm,
 };
 
-static const struct v4l2_ctrl_ops hws_ctrl_ops = {
+const struct v4l2_ctrl_ops hws_ctrl_ops = {
 	.g_volatile_ctrl = hws_g_volatile_ctrl,
 };
 
