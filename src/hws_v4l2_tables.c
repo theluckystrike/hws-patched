@@ -150,3 +150,73 @@ const int framegrabber_support_refreshrate[] = {
 const size_t framegrabber_support_refreshrate_count =
     ARRAY_SIZE(framegrabber_support_refreshrate);
 
+int v4l2_model_get_support_framerate(int index)
+{
+	if (index < 0 || index >= NUM_FRAMERATE_CONTROLS)
+		return -1;
+
+	return (framegrabber_support_refreshrate[index]);
+}
+
+int v4l2_get_suport_VideoFormatIndex(struct v4l2_format *fmt)
+{
+	struct v4l2_pix_format *pix = &fmt->fmt.pix;
+	int index;
+	int videoIndex = -1;
+	for (index = 0; index < V4L2_MODEL_VIDEOFORMAT_NUM; index++) {
+		if ((pix->width == support_videofmt[index].frame_size.width) &&
+		    (pix->height ==
+		     support_videofmt[index].frame_size.height)) {
+			videoIndex = index;
+			break;
+		}
+	}
+	return videoIndex;
+}
+
+v4l2_model_timing_t *v4l2_model_get_support_videoformat(int index)
+{
+	if (index < 0 || index >= V4L2_MODEL_VIDEOFORMAT_NUM)
+		return NULL;
+
+	return (v4l2_model_timing_t *)&support_videofmt[index];
+}
+
+framegrabber_pixfmt_t *v4l2_model_get_support_pixformat(int index)
+{
+	if (index < 0 || index >= ARRAY_SIZE(support_pixfmts))
+		return NULL;
+
+	return (framegrabber_pixfmt_t *)&support_pixfmts[index];
+}
+
+const framegrabber_pixfmt_t *
+framegrabber_g_support_pixelfmt_by_fourcc(u32 fourcc)
+{
+	int i;
+	int pixfmt_index = -1;
+	for (i = 0; i < FRAMEGRABBER_PIXFMT_MAX; i++) {
+		if (support_pixfmts[i].fourcc == fourcc) {
+			pixfmt_index = i;
+			break;
+		}
+	}
+	if (pixfmt_index == -1)
+		return NULL;
+
+	return &support_pixfmts[pixfmt_index];
+}
+
+void framegrabber_g_Curr_input_framesize(struct hws_video *dev, int *width,
+					 int *height)
+{
+	struct hws_pcie_dev *pdx = dev->dev;
+	int index = dev->index;
+	*width = pdx->m_pVCAPStatus[index][0].dwWidth;
+	*height = pdx->m_pVCAPStatus[index][0].dwHeight;
+}
+
+const framegrabber_pixfmt_t *framegrabber_g_out_pixelfmt(struct hws_video *dev)
+{
+	return &support_pixfmts[dev->current_out_pixfmt];
+}
