@@ -220,3 +220,15 @@ const framegrabber_pixfmt_t *framegrabber_g_out_pixelfmt(struct hws_video *dev)
 {
 	return &support_pixfmts[dev->current_out_pixfmt];
 }
+
+v4l2_model_timing_t *Get_input_framesizeIndex(int width, int height)
+{
+	int i;
+	for (i = 0; i < V4L2_MODEL_VIDEOFORMAT_NUM; i++) {
+		if ((support_videofmt[i].frame_size.width == width) &&
+		    (support_videofmt[i].frame_size.height == height)) {
+			return (v4l2_model_timing_t *)&support_videofmt[i];
+		}
+	}
+	return NULL;
+}
