@@ -1,5 +1,19 @@
 #include "hws_video_pipeline.h"
+#include "hws_reg.h"
+#include "hws_pci.h"
+#include "hws_scaler.h"
+#include "hws_init.h"
+#include "hws_dma.h"
+#include "hws_audio_pipeline.h"
 
+static inline u32 hws_read_port_hpd(struct hws_pcie_dev *pdx, int port)
+{
+	/* OR the two pipes that belong to this HDMI jack */
+	int pipe0 = port * 2;
+	int pipe1 = pipe0 + 1;
+	return  READ_REGISTER_ULONG(pdx, HWS_REG_HPD(pipe0)) |
+		READ_REGISTER_ULONG(pdx, HWS_REG_HPD(pipe1));
+}
 
 int SetVideoFormatSize(struct hws_pcie_dev *pdx, int ch, int w, int h)
 {
@@ -42,7 +56,7 @@ void ChangeVideoSize(struct hws_pcie_dev *pdx, int ch, int w, int h,
 		pdx->m_pVCAPStatus[ch][j].dwinterlace = interlace;
 	}
 	spin_unlock_irqrestore(&pdx->videoslock[ch], flags);
-	SetVideoFormteSize(pdx, ch, w, h);
+	SetVideoFormatSize(pdx, ch, w, h);
 	halfframeLength = pdx->m_format[ch].HLAF_SIZE / 16;
 	WRITE_REGISTER_ULONG(
 		pdx, (DWORD)(CBVS_IN_BUF_BASE2 + (ch * PCIE_BARADDROFSIZE)),
@@ -250,8 +264,8 @@ int Get_Video_Status(struct hws_pcie_dev *pdx, unsigned int ch)
 		bool hpd_hi = !!(hpd & HWS_HPD_BIT);
 
 		/* cache & push to ctrl core only on change */
-		if (power != vid->detect_tx_5v_ctrl->cur.val) {
-			v4l2_ctrl_s_ctrl(vid->detect_tx_5v_ctrl, power);
+		if (power != pdx->video[ch].detect_tx_5v_ctrl->cur.val) {
+			v4l2_ctrl_s_ctrl(pdx->video[ch].detect_tx_5v_ctrl, power);
 		}
 	}
 

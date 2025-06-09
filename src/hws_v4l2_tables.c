@@ -1,5 +1,6 @@
 #include "hws_v4l2_tables.h"
 #include <linux/kernel.h>
+#include "hws.h"
 
 const v4l2_model_timing_t support_videofmt[] = {
 	[V4L2_MODEL_VIDEOFORMAT_1920X1080P60] =

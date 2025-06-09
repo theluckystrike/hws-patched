@@ -3,23 +3,8 @@
 #include "hws_pci.h"
 #include "hws_video_pipeline.h"
 #include "hws_audio_pipeline.h"
-#include "hws_video.h"
+#include "hws_dma.h"
 
-static void StopDsp(struct hws_pcie_dev *pdx)
-{
-	//int j, i;
-	u32 statusreg;
-	statusreg = READ_REGISTER_ULONG(pdx, HWS_REG_DEC_MODE);
-	printk("[MV] Busy!!! statusreg =%X\n", statusreg);
-	if (statusreg == 0xFFFFFFFF) {
-		return;
-	}
-	WRITE_REGISTER_ULONG(pdx, HWS_REG_DEC_MODE, 0x10);
-	Check_Busy(pdx);
-	WRITE_REGISTER_ULONG(pdx, HWS_REG_VCAP_ENABLE, 0x00);
-}
-
-//----------------------------------------------
 static int Check_Busy(struct hws_pcie_dev *pdx)
 {
 	u32 statusreg;
@@ -44,6 +29,22 @@ static int Check_Busy(struct hws_pcie_dev *pdx)
 
 	return 0;
 }
+
+static void StopDsp(struct hws_pcie_dev *pdx)
+{
+	//int j, i;
+	u32 statusreg;
+	statusreg = READ_REGISTER_ULONG(pdx, HWS_REG_DEC_MODE);
+	printk("[MV] Busy!!! statusreg =%X\n", statusreg);
+	if (statusreg == 0xFFFFFFFF) {
+		return;
+	}
+	WRITE_REGISTER_ULONG(pdx, HWS_REG_DEC_MODE, 0x10);
+	Check_Busy(pdx);
+	WRITE_REGISTER_ULONG(pdx, HWS_REG_VCAP_ENABLE, 0x00);
+}
+
+//----------------------------------------------
 
 int ReadChipId(struct hws_pcie_dev *pdx)
 {
