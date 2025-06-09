@@ -485,6 +485,17 @@ int arch_msi_check_device(struct pci_dev *dev, int nvec, int type)
 
 MODULE_DEVICE_TABLE(pci, hws_pci_table);
 
+static int __init pcie_hws_init(void)
+{
+        return pci_register_driver(&hws_pci_driver);
+}
+
+static void __exit pcie_hws_exit(void)
+{
+        pci_unregister_driver(&hws_pci_driver);
+}
+
+
 module_init(pcie_hws_init);
 module_exit(pcie_hws_exit);
 

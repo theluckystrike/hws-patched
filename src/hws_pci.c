@@ -26,8 +26,13 @@ static const struct pci_device_id hws_pci_table[] = {
 	MAKE_ENTRY(0x1F33, 0x8504, 0x8888, 0x0007, NULL),
 	MAKE_ENTRY(0x1F33, 0x8524, 0x8888, 0x0007, NULL),
 
-	{}
+	{ }
 };
+
+static void enable_pcie_relaxed_ordering(struct pci_dev *dev)
+{
+	pcie_capability_set_word(dev, PCI_EXP_DEVCTL, PCI_EXP_DEVCTL_RELAX_EN);
+}
 
 int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 {
@@ -142,7 +147,6 @@ int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 		/* mark it volatile + read-only */
 		vid->detect_tx_5v_ctrl->flags |= V4L2_CTRL_FLAG_VOLATILE |
 						 V4L2_CTRL_FLAG_READ_ONLY;
-
 
 		/* 4. Create the “IT content-type” enum (volatile) */
 		vid->content_type = v4l2_ctrl_new_std(
@@ -405,25 +409,6 @@ struct hws_pcie_dev *alloc_dev_instance(struct pci_dev *pdev)
 	return lro;
 }
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 5, 0)
-static void enable_pcie_relaxed_ordering(struct pci_dev *dev)
-{
-	pcie_capability_set_word(dev, PCI_EXP_DEVCTL, PCI_EXP_DEVCTL_RELAX_EN);
-}
-#else
-static void __devinit enable_pcie_relaxed_ordering(struct pci_dev *dev)
-{
-	u16 v;
-	int pos;
-
-	pos = pci_pcie_cap(dev);
-	if (pos > 0) {
-		pci_read_config_word(dev, pos + PCI_EXP_DEVCTL, &v);
-		v |= PCI_EXP_DEVCTL_RELAX_EN;
-		pci_write_config_word(dev, pos + PCI_EXP_DEVCTL, v);
-	}
-}
-#endif
 //--------------------------------------
 
 /* type = PCI_CAP_ID_MSI or PCI_CAP_ID_MSIX */
@@ -497,7 +482,7 @@ static int probe_scan_for_msi(struct hws_pcie_dev *lro, struct pci_dev *pdev)
 }
 
 void WRITE_REGISTER_ULONG(struct hws_pcie_dev *pdx, u32 RegisterOffset,
-				 u32 Value)
+			  u32 Value)
 {
 	//map_bar0_addr[RegisterOffset/4] = Value;
 	char *bar0;
@@ -520,15 +505,5 @@ static struct pci_driver hws_pci_driver = {
 	.probe = hws_probe,
 	.remove = hws_remove,
 };
-
-
-int __init pcie_hws_init(void)
-{
-	return pci_register_driver(&hws_pci_driver);
-}
-
-void __exit pcie_hws_exit(void)
-{
-	pci_unregister_driver(&hws_pci_driver);
-}
-
+/*
+*/
