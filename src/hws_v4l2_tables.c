@@ -3,7 +3,6 @@
 #include "hws.h"
 #include "hws_reg.h"
 
-#define NUM_FRAMERATE_CONTROLS (ARRAY_SIZE(framegrabber_support_refreshrate))
 
 const v4l2_model_timing_t support_videofmt[] = {
 	[V4L2_MODEL_VIDEOFORMAT_1920X1080P60] =
@@ -151,12 +150,16 @@ const int framegrabber_support_refreshrate[] = {
 	[REFRESHRATE_144] = 144, [REFRESHRATE_240] = 240,
 };
 
+const size_t num_framerate_controls=
+    ARRAY_SIZE(framegrabber_support_refreshrate);
+
+
 const size_t framegrabber_support_refreshrate_count =
     ARRAY_SIZE(framegrabber_support_refreshrate);
 
 int v4l2_model_get_support_framerate(int index)
 {
-	if (index < 0 || index >= NUM_FRAMERATE_CONTROLS)
+	if (index < 0 || index >= num_framerate_controls)
 		return -1;
 
 	return (framegrabber_support_refreshrate[index]);

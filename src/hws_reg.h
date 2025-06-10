@@ -8,7 +8,7 @@
 #define  PCI_BARADDROFSIZE 4
 
 #define HWS_VIDEO_NAME "HVideo"
-#define HWS_AUDOI_NAME "HAudio"
+#define HWS_AUDIO_NAME "HAudio"
 
 
 

@@ -1,7 +1,19 @@
 #include "hws_audio_pipeline.h"
 
+#include "hws.h"
+#include "hws_reg.h"
+#include "hws_pci.h"
+#include "hws_init.h"
+
+#include <sound/core.h>
+#include <sound/control.h>
+#include <sound/pcm.h>
+#include <sound/rawmidi.h>
+#include <sound/initval.h>
+
+
 #if 1
-static struct snd_pcm_hardware audio_pcm_hardware = {
+struct snd_pcm_hardware audio_pcm_hardware = {
 	.info = (SNDRV_PCM_INFO_MMAP | SNDRV_PCM_INFO_INTERLEAVED |
 		 SNDRV_PCM_INFO_BLOCK_TRANSFER | SNDRV_PCM_INFO_RESUME |
 		 SNDRV_PCM_INFO_MMAP_VALID),
@@ -18,7 +30,7 @@ static struct snd_pcm_hardware audio_pcm_hardware = {
 	.periods_max = 255,
 };
 #else
-static struct snd_pcm_hardware audio_pcm_hardware = {
+struct snd_pcm_hardware audio_pcm_hardware = {
 	.info = (SNDRV_PCM_INFO_INTERLEAVED | SNDRV_PCM_INFO_BLOCK_TRANSFER),
 	.formats = (SNDRV_PCM_FMTBIT_S16_LE),
 	.rates = SNDRV_PCM_RATE_KNOT | SNDRV_PCM_RATE_48000,
@@ -360,92 +372,6 @@ hws_pcie_audio_pointer(struct snd_pcm_substream *substream)
 	return pos;
 }
 
-
-int hws_audio_register(struct hws_pcie_dev *dev)
-{
-	struct snd_pcm *pcm;
-	struct snd_card *card;
-	int ret;
-	int i;
-	int ai_index;
-	char audioname[100];
-	//printk("hws_audio_register Start\n");
-	ai_index = dev->m_Device_PortID * dev->m_nCurreMaxVideoChl + 1;
-	for (i = 0; i < dev->m_nCurreMaxVideoChl; i++) {
-		sprintf(audioname, "%s %d", HWS_AUDOI_NAME, i + ai_index);
-		//printk("%s\n",audioname);
-		ret = snd_card_new(&dev->pdev->dev, -1, audioname, THIS_MODULE,
-				   sizeof(struct hws_audio), &card);
-		// ret = snd_card_new(&dev->pdev->dev, audio_index[i], audio_id[i], THIS_MODULE,	sizeof(struct hws_audio), &card);
-		if (ret < 0) {
-			printk(KERN_ERR
-			       "%s() ERROR: snd_card_new failed <%d>\n",
-			       __func__, ret);
-			goto fail0;
-		}
-		strcpy(card->driver, KBUILD_MODNAME);
-		sprintf(card->shortname, "%s", audioname);
-		sprintf(card->longname, "%s", card->shortname);
-
-		ret = snd_pcm_new(card, audioname, 0, 0, 1, &pcm);
-		if (ret < 0) {
-			printk(KERN_ERR "%s() ERROR: snd_pcm_new failed <%d>\n",
-			       __func__, ret);
-			goto fail1;
-		}
-		dev->audio[i].index = i;
-		dev->audio[i].dev = dev;
-		pcm->private_data = &dev->audio[i];
-		strcpy(pcm->name, audioname);
-		snd_pcm_set_ops(pcm, SNDRV_PCM_STREAM_CAPTURE,
-				&hws_pcie_pcm_ops);
-		//snd_pcm_lib_preallocate_pages_for_all(pcm, SNDRV_DMA_TYPE_DEV,snd_dma_pci_data(dev->pdev), HWS_AUDIO_CELL_SIZE*4, HWS_AUDIO_CELL_SIZE*4);
-		snd_pcm_lib_preallocate_pages_for_all(
-			pcm, SNDRV_DMA_TYPE_CONTINUOUS,
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0))
-			card->dev,
-#else
-			snd_dma_continuous_data(GFP_KERNEL),
-#endif
-			audio_pcm_hardware.buffer_bytes_max,
-			audio_pcm_hardware.buffer_bytes_max);
-		//----------------------------
-		dev->audio[i].sample_rate_out = 48000;
-		dev->audio[i].channels = 2;
-		dev->audio[i].resampled_buf_size =
-			dev->audio[i].sample_rate_out * 2 /* sample bytes */ *
-			dev->audio[i].channels /* channels */;
-		//dev->audio[i].resampled_buf = vmalloc(dev->audio[i].resampled_buf_size);
-		//if(dev->audio[i].resampled_buf == NULL)
-		//	goto fail1;
-		//-----------------
-		spin_lock_init(&dev->audio[i].ring_lock);
-		INIT_WORK(&dev->audio[i].audiowork, audio_data_process);
-		ret = snd_card_register(card);
-		if (ret < 0) {
-			printk(KERN_ERR
-			       "%s() ERROR: snd_card_register failed\n",
-			       __func__);
-			goto fail1;
-		}
-		dev->audio[i].card = card;
-	}
-	//printk("hws_audio_register End\n");
-	return 0;
-fail1:
-	for (i = 0; i < dev->m_nCurreMaxVideoChl; i++) {
-		if (dev->audio[i].card) {
-			snd_card_free(dev->audio[i].card);
-			dev->audio[i].card = NULL;
-		}
-		if (dev->audio[i].resampled_buf) {
-			vfree(dev->audio[i].resampled_buf);
-			dev->audio[i].resampled_buf = NULL;
-		}
-	}
-fail0:
-	return -1;
-}
 int hws_pcie_audio_open(struct snd_pcm_substream *substream)
 {
 	struct hws_audio *drv = snd_pcm_substream_chip(substream);
@@ -528,7 +454,6 @@ int hws_pcie_audio_trigger(struct snd_pcm_substream *substream, int cmd)
 	}
 	return 0;
 }
-//-------------------------------------------------
 
 struct snd_pcm_ops hws_pcie_pcm_ops = { .open = hws_pcie_audio_open,
 					.close = hws_pcie_audio_close,
@@ -538,3 +463,89 @@ struct snd_pcm_ops hws_pcie_pcm_ops = { .open = hws_pcie_audio_open,
 					.prepare = hws_pcie_audio_prepare,
 					.trigger = hws_pcie_audio_trigger,
 					.pointer = hws_pcie_audio_pointer };
+
+int hws_audio_register(struct hws_pcie_dev *dev)
+{
+	struct snd_pcm *pcm;
+	struct snd_card *card;
+	int ret;
+	int i;
+	int ai_index;
+	char audioname[100];
+	//printk("hws_audio_register Start\n");
+	ai_index = dev->m_Device_PortID * dev->m_nCurreMaxVideoChl + 1;
+	for (i = 0; i < dev->m_nCurreMaxVideoChl; i++) {
+		sprintf(audioname, "%s %d", HWS_AUDIO_NAME, i + ai_index);
+		//printk("%s\n",audioname);
+		ret = snd_card_new(&dev->pdev->dev, -1, audioname, THIS_MODULE,
+				   sizeof(struct hws_audio), &card);
+		// ret = snd_card_new(&dev->pdev->dev, audio_index[i], audio_id[i], THIS_MODULE,	sizeof(struct hws_audio), &card);
+		if (ret < 0) {
+			printk(KERN_ERR
+			       "%s() ERROR: snd_card_new failed <%d>\n",
+			       __func__, ret);
+			goto fail0;
+		}
+		strcpy(card->driver, KBUILD_MODNAME);
+		sprintf(card->shortname, "%s", audioname);
+		sprintf(card->longname, "%s", card->shortname);
+
+		ret = snd_pcm_new(card, audioname, 0, 0, 1, &pcm);
+		if (ret < 0) {
+			printk(KERN_ERR "%s() ERROR: snd_pcm_new failed <%d>\n",
+			       __func__, ret);
+			goto fail1;
+		}
+		dev->audio[i].index = i;
+		dev->audio[i].dev = dev;
+		pcm->private_data = &dev->audio[i];
+		strcpy(pcm->name, audioname);
+		snd_pcm_set_ops(pcm, SNDRV_PCM_STREAM_CAPTURE,
+				&hws_pcie_pcm_ops);
+		//snd_pcm_lib_preallocate_pages_for_all(pcm, SNDRV_DMA_TYPE_DEV,snd_dma_pci_data(dev->pdev), HWS_AUDIO_CELL_SIZE*4, HWS_AUDIO_CELL_SIZE*4);
+		snd_pcm_lib_preallocate_pages_for_all(
+			pcm, SNDRV_DMA_TYPE_CONTINUOUS,
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0))
+			card->dev,
+#else
+			snd_dma_continuous_data(GFP_KERNEL),
+#endif
+			audio_pcm_hardware.buffer_bytes_max,
+			audio_pcm_hardware.buffer_bytes_max);
+		//----------------------------
+		dev->audio[i].sample_rate_out = 48000;
+		dev->audio[i].channels = 2;
+		dev->audio[i].resampled_buf_size =
+			dev->audio[i].sample_rate_out * 2 /* sample bytes */ *
+			dev->audio[i].channels /* channels */;
+		//dev->audio[i].resampled_buf = vmalloc(dev->audio[i].resampled_buf_size);
+		//if(dev->audio[i].resampled_buf == NULL)
+		//	goto fail1;
+		//-----------------
+		spin_lock_init(&dev->audio[i].ring_lock);
+		INIT_WORK(&dev->audio[i].audiowork, audio_data_process);
+		ret = snd_card_register(card);
+		if (ret < 0) {
+			printk(KERN_ERR
+			       "%s() ERROR: snd_card_register failed\n",
+			       __func__);
+			goto fail1;
+		}
+		dev->audio[i].card = card;
+	}
+	//printk("hws_audio_register End\n");
+	return 0;
+fail1:
+	for (i = 0; i < dev->m_nCurreMaxVideoChl; i++) {
+		if (dev->audio[i].card) {
+			snd_card_free(dev->audio[i].card);
+			dev->audio[i].card = NULL;
+		}
+		if (dev->audio[i].resampled_buf) {
+			vfree(dev->audio[i].resampled_buf);
+			dev->audio[i].resampled_buf = NULL;
+		}
+	}
+fail0:
+	return -1;
+}

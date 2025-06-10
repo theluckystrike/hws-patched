@@ -2,6 +2,7 @@
 #define HWS_V4L2_CTRL_H
 
 #include <media/v4l2-ctrls.h>
+#include "hws.h"
 
 /* your control-ops */
 extern const struct v4l2_ctrl_ops hws_ctrl_ops;
