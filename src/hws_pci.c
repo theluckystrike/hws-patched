@@ -412,7 +412,7 @@ struct hws_pcie_dev *alloc_dev_instance(struct pci_dev *pdev)
 //--------------------------------------
 
 /* type = PCI_CAP_ID_MSI or PCI_CAP_ID_MSIX */
-static int msi_msix_capable(struct pci_dev *dev, int type)
+int msi_msix_capable(struct pci_dev *dev, int type)
 {
 	struct pci_bus *bus;
 	int ret;
@@ -441,7 +441,7 @@ static int msi_msix_capable(struct pci_dev *dev, int type)
 	return 1;
 }
 
-static int probe_scan_for_msi(struct hws_pcie_dev *lro, struct pci_dev *pdev)
+int probe_scan_for_msi(struct hws_pcie_dev *lro, struct pci_dev *pdev)
 {
 	//int i;
 	int rc = 0;

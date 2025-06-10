@@ -25,8 +25,11 @@ void WRITE_REGISTER_ULONG(struct hws_pcie_dev *pdx, u32 RegisterOffset,
 				 u32 Value);
 u32 READ_REGISTER_ULONG(struct hws_pcie_dev *pdx, u32 RegisterOffset);
 
+#ifndef arch_msi_check_device
 int  arch_msi_check_device(struct pci_dev *dev, int nvec, int type);
-static int msi_msix_capable(struct pci_dev *dev, int type);
-static int probe_scan_for_msi(struct hws_pcie_dev *lro, struct pci_dev *pdev);
+#endif
+
+int msi_msix_capable(struct pci_dev *dev, int type);
+int probe_scan_for_msi(struct hws_pcie_dev *lro, struct pci_dev *pdev);
 
 #endif /* HWS_PCI_H */

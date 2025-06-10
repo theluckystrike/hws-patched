@@ -293,8 +293,6 @@ static const struct vb2_ops hwspcie_video_qops = {
 	.stop_streaming = hws_stop_streaming,
 };
 
-
-
 void hws_remove_deviceregister(struct hws_pcie_dev *dev)
 {
 	int i;
@@ -309,6 +307,7 @@ void hws_remove_deviceregister(struct hws_pcie_dev *dev)
 		}
 	}
 }
+
 int hws_video_register(struct hws_pcie_dev *dev)
 {
 	struct video_device *vdev;
@@ -414,29 +413,12 @@ fail:
 	return err;
 }
 
-
-
-
-
-
-
-
 void StopKSThread(struct hws_pcie_dev *pdx)
 {
 	if (pdx->mMain_tsk) {
 		kthread_stop(pdx->mMain_tsk);
 	}
 }
-
-//----------------------------
-
-
-
-
-
-//-----------------------------------
-
-
 
 int MainKsThreadHandle(void *arg)
 {
@@ -462,13 +444,12 @@ int MainKsThreadHandle(void *arg)
 	//printk("MainKsThreadHandle Exit");
 	return 0;
 }
+
 void StartKSThread(struct hws_pcie_dev *pdx)
 {
 	pdx->mMain_tsk = kthread_run(MainKsThreadHandle, (void *)pdx,
 				     "StartKSThread task");
 }
-
-//------------------------------
 
 #ifndef arch_msi_check_device
 int arch_msi_check_device(struct pci_dev *dev, int nvec, int type)
@@ -476,11 +457,6 @@ int arch_msi_check_device(struct pci_dev *dev, int nvec, int type)
 	return 0;
 }
 #endif
-
-
-
-//-------------------------------------
-
 
 MODULE_DEVICE_TABLE(pci, hws_pci_table);
 
@@ -493,7 +469,6 @@ static void __exit pcie_hws_exit(void)
 {
         pci_unregister_driver(&hws_pci_driver);
 }
-
 
 module_init(pcie_hws_init);
 module_exit(pcie_hws_exit);
