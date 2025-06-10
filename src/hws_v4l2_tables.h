@@ -10,6 +10,8 @@
 
 #include <linux/types.h>
 #include <media/v4l2-device.h>    /* for v4l2_model_timing_t, V4L2_MODEL_TIMING */
+#include "hws.h"
+#include "hws_reg.h"
 
 /* --- supported video‐format timings --- */
 extern const v4l2_model_timing_t support_videofmt[];

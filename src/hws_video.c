@@ -25,7 +25,6 @@
 //u32 *map_bar0_addr=NULL; //for sys bar0
 //EXPORT_SYMBOL(map_bar0_addr);
 
-#define NUM_FRAMERATE_CONTROLS (ARRAY_SIZE(framegrabber_support_refreshrate))
 
 //-------------------------------------------
 

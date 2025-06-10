@@ -1,6 +1,9 @@
 #include "hws_v4l2_tables.h"
 #include <linux/kernel.h>
 #include "hws.h"
+#include "hws_reg.h"
+
+#define NUM_FRAMERATE_CONTROLS (ARRAY_SIZE(framegrabber_support_refreshrate))
 
 const v4l2_model_timing_t support_videofmt[] = {
 	[V4L2_MODEL_VIDEOFORMAT_1920X1080P60] =
