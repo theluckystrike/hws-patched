@@ -507,3 +507,29 @@ static struct pci_driver hws_pci_driver = {
 };
 /*
 */
+#ifndef arch_msi_check_device
+int arch_msi_check_device(struct pci_dev *dev, int nvec, int type)
+{
+	return 0;
+}
+#endif
+
+MODULE_DEVICE_TABLE(pci, hws_pci_table);
+
+static int __init pcie_hws_init(void)
+{
+        return pci_register_driver(&hws_pci_driver);
+}
+
+static void __exit pcie_hws_exit(void)
+{
+        pci_unregister_driver(&hws_pci_driver);
+}
+
+module_init(pcie_hws_init);
+module_exit(pcie_hws_exit);
+
+MODULE_DESCRIPTION("HWS driver");
+MODULE_AUTHOR("Sales <sales@avmatrix.com>");
+MODULE_LICENSE("GPL");
+MODULE_VERSION("1.0");

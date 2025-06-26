@@ -163,7 +163,7 @@ static struct v4l2_queryctrl *find_ctrl(unsigned int id)
 
 	return 0;
 }
-static int hws_vidioc_querycap(struct file *file, void *priv,
+int hws_vidioc_querycap(struct file *file, void *priv,
 			       struct v4l2_capability *cap)
 {
 	struct hws_video *videodev = video_drvdata(file);
@@ -180,7 +180,7 @@ static int hws_vidioc_querycap(struct file *file, void *priv,
 	//printk( "%s(IN END  )\n", __func__);
 	return 0;
 }
-static int hws_vidioc_enum_fmt_vid_cap(struct file *file, void *priv_fh,
+int hws_vidioc_enum_fmt_vid_cap(struct file *file, void *priv_fh,
 				       struct v4l2_fmtdesc *f)
 {
 	struct hws_video *videodev = video_drvdata(file);
@@ -213,7 +213,7 @@ static int hws_vidioc_enum_fmt_vid_cap(struct file *file, void *priv_fh,
 	}
 	return 0;
 }
-static int hws_vidioc_g_fmt_vid_cap(struct file *file, void *fh,
+int hws_vidioc_g_fmt_vid_cap(struct file *file, void *fh,
 				    struct v4l2_format *fmt)
 {
 	struct hws_video *videodev = video_drvdata(file);
@@ -245,7 +245,7 @@ static int hws_vidioc_g_fmt_vid_cap(struct file *file, void *fh,
 	return -EINVAL;
 }
 
-static int hws_vidioc_try_fmt_vid_cap(struct file *file, void *fh,
+int hws_vidioc_try_fmt_vid_cap(struct file *file, void *fh,
 				      struct v4l2_format *f)
 {
 	struct hws_video *videodev = video_drvdata(file);
@@ -294,7 +294,7 @@ static int hws_vidioc_try_fmt_vid_cap(struct file *file, void *fh,
 	return 0;
 }
 
-static int vidioc_s_fmt_vid_cap(struct file *file, void *priv,
+int vidioc_s_fmt_vid_cap(struct file *file, void *priv,
 				struct v4l2_format *f)
 {
 	struct hws_video *videodev = video_drvdata(file);
@@ -319,7 +319,8 @@ static int vidioc_s_fmt_vid_cap(struct file *file, void *priv,
 	spin_unlock_irqrestore(&pdx->videoslock[videodev->index], flags);
 	return 0;
 }
-static int hws_vidioc_g_std(struct file *file, void *priv, v4l2_std_id *tvnorms)
+
+int hws_vidioc_g_std(struct file *file, void *priv, v4l2_std_id *tvnorms)
 {
 	struct hws_video *videodev = video_drvdata(file);
 	//printk( "%s()\n", __func__);
@@ -327,7 +328,7 @@ static int hws_vidioc_g_std(struct file *file, void *priv, v4l2_std_id *tvnorms)
 	return 0;
 }
 
-static int hws_vidioc_s_std(struct file *file, void *priv, v4l2_std_id tvnorms)
+int hws_vidioc_s_std(struct file *file, void *priv, v4l2_std_id tvnorms)
 {
 	struct hws_video *videodev = video_drvdata(file);
 	//printk( "%s()\n", __func__);
@@ -358,7 +359,7 @@ int hws_vidioc_g_parm(struct file *file, void *fh,
 	return 0;
 }
 
-static int hws_vidioc_enum_framesizes(struct file *file, void *fh,
+int hws_vidioc_enum_framesizes(struct file *file, void *fh,
 				      struct v4l2_frmsizeenum *fsize)
 {
 	//struct hws_video *videodev = video_drvdata(file);
@@ -403,7 +404,7 @@ static int hws_vidioc_enum_framesizes(struct file *file, void *fh,
 	return 0;
 }
 
-static int hws_vidioc_enum_input(struct file *file, void *priv,
+int hws_vidioc_enum_input(struct file *file, void *priv,
 				 struct v4l2_input *i)
 {
 	//struct hws_video *videodev = video_drvdata(file);
@@ -422,7 +423,7 @@ static int hws_vidioc_enum_input(struct file *file, void *priv,
 	return 0;
 }
 
-static int hws_vidioc_g_input(struct file *file, void *priv, unsigned int *i)
+int hws_vidioc_g_input(struct file *file, void *priv, unsigned int *i)
 {
 	//struct hws_video *videodev = video_drvdata(file);
 	int Index;
@@ -448,7 +449,7 @@ static int hws_vidioc_g_input(struct file *file, void *priv, unsigned int *i)
 	return 0;
 }
 
-static int hws_vidioc_s_input(struct file *file, void *priv, unsigned int i)
+int hws_vidioc_s_input(struct file *file, void *priv, unsigned int i)
 {
 #if 0
 	struct hws_video *videodev = video_drvdata(file);
@@ -469,7 +470,8 @@ static int hws_vidioc_s_input(struct file *file, void *priv, unsigned int i)
 	//printk( "%s(%d)\n", __func__,i);
 	return i ? -EINVAL : 0;
 }
-static int vidioc_log_status(struct file *file, void *priv)
+
+int vidioc_log_status(struct file *file, void *priv)
 {
 	//printk( "%s()\n", __func__);
 	return 0;
@@ -586,7 +588,7 @@ int hws_vidioc_s_ctrl(struct file *file, void *fh, struct v4l2_control *a)
 	return ret;
 }
 
-static int hws_vidioc_queryctrl(struct file *file, void *fh,
+int hws_vidioc_queryctrl(struct file *file, void *fh,
 				struct v4l2_queryctrl *a)
 {
 	struct hws_video *videodev = video_drvdata(file);
@@ -656,7 +658,8 @@ static int hws_vidioc_streamoff(struct file *file, void *priv, enum v4l2_buf_typ
 
 }
 #endif
-static int hws_vidioc_enum_frameintervals(struct file *file, void *fh,
+
+int hws_vidioc_enum_frameintervals(struct file *file, void *fh,
 					  struct v4l2_frmivalenum *fival)
 {
 	//struct hws_video *videodev = video_drvdata(file);

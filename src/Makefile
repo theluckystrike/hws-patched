@@ -7,6 +7,7 @@ HwsCapture-objs := \
 	 hws_scaler.o \
 	 hws_init.o \
 	 hws_video_pipeline.o \
+	 hws_video.o \
 	 hws_v4l2_tables.o \
 	 hws_v4l2_ioctl.o \
 	 hws_audio_pipeline.o \
