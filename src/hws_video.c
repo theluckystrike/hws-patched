@@ -11,9 +11,11 @@
 #include "hws.h"
 #include "hws_reg.h"
 #include "hws_dma.h"
+#include "hws_video.h"
 #include "hws_scaler.h"
 #include "hws_interrupt.h"
 #include "hws_v4l2_ioctl.h"
+#include "hws_video_pipeline.h"
 
 #include <sound/core.h>
 #include <sound/control.h>
@@ -291,7 +293,7 @@ static const struct vb2_ops hwspcie_video_qops = {
 	.stop_streaming = hws_stop_streaming,
 };
 
-void hws_remove_deviceregister(struct hws_pcie_dev *dev)
+static void hws_remove_deviceregister(struct hws_pcie_dev *dev)
 {
 	int i;
 	struct video_device *vdev;
@@ -418,7 +420,7 @@ void StopKSThread(struct hws_pcie_dev *pdx)
 	}
 }
 
-int MainKsThreadHandle(void *arg)
+static int MainKsThreadHandle(void *arg)
 {
 	int need_check = 0;
 	int i = 0;

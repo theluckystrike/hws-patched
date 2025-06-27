@@ -1,6 +1,11 @@
 #ifndef HWS_V4L2_IOCTL_H
 #define HWS_V4L2_IOCTL_H 
 
+#include <media/v4l2-ctrls.h>
+#include <linux/fs.h>
+
+extern const struct v4l2_ctrl_ops hws_ctrl_ops;
+
 int hws_vidioc_querycap(struct file *file, void *priv, struct v4l2_capability *cap);
 int hws_vidioc_enum_fmt_vid_cap(struct file *file, void *priv_fh, struct v4l2_fmtdesc *f);
 int hws_vidioc_g_fmt_vid_cap(struct file *file, void *fh, struct v4l2_format *fmt);

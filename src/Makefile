@@ -10,8 +10,7 @@ HwsCapture-objs := \
 	 hws_video.o \
 	 hws_v4l2_tables.o \
 	 hws_v4l2_ioctl.o \
-	 hws_audio_pipeline.o \
-	 hws_v4l2_ctrl.o 
+	 hws_audio_pipeline.o 
 
 src := $(PWD)
 

@@ -5,7 +5,7 @@
 #include "hws.h"
 #include "hws_init.h"
 #include "hws_dma.h"
-#include "hws_v4l2_ctrl.h"
+#include "hws_v4l2_ioctl.h"
 #include "hws_video_pipeline.h"
 #include "hws_audio_pipeline.h"
 #include "hws_interrupt.h"
