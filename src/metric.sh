@@ -63,9 +63,9 @@ EOF
   elif command -v lizard &>/dev/null; then
     read ccx maxccx <<EOF
 $(lizard "$src" \
-  | sed -n '4,$p' \
-  | awk '/^[[:space:]]*[0-9]+/{ccn=int($2); sum+=ccn; if(ccn>mx)mx=ccn} \
-         END{print sum+0, mx+0}')
+   | sed -n '4,$p' \
+   | awk '/@'"$src"'$/ { ccn=int($2); sum+=ccn; if(ccn>mx) mx=ccn } \
+          END{print sum+0, mx+0}')
 EOF
   else
     ccx=$(grep -E -o '\b(if|for|while|case)\b' "$src" | wc -l)
