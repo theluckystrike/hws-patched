@@ -103,3 +103,80 @@ void run_scaler(u8 *src, u8 *dst,
     }
 }
 
+void FHD_To_800X600_Scaler(BYTE *pSrc, BYTE *pOut, int in_w, int in_h,
+				  int out_w, int out_h)
+{
+	int x, y;
+	BYTE *pSrcBuf;
+	//   BYTE*pDestBuf;
+	int *pSrcData;
+	int *pDestData;
+	pSrcBuf = pSrc;
+	pDestData = (int *)pOut;
+	for (y = 0; y < in_h; y++) {
+		switch (y % 9) {
+		case 0:
+		case 2:
+		case 4:
+		case 6:
+		case 8: {
+			pSrcBuf = pSrc + (y * in_w * 2) + (240 * 2);
+			for (x = 0; x < (in_w - 480);) {
+				pSrcData = (int *)pSrcBuf;
+				pDestData[0] = pSrcData[0];
+				pDestData[1] = pSrcData[2];
+				pDestData[2] = pSrcData[4];
+				pDestData[3] = pSrcData[6];
+				pDestData[4] = pSrcData[8];
+				pSrcBuf += 18 * 2;
+				pDestData += 5;
+				x = x + 18;
+			}
+			break;
+		}
+		case 1:
+		case 3:
+		case 5:
+		case 7: {
+			break;
+		}
+		}
+	}
+}
+
+static void V1280X1024_PAL_Scaler(BYTE *pSrc, BYTE *pOut, int in_w, int in_h, int out_w, int out_h)
+{
+	int y;
+	BYTE *pSrcBuf;
+	BYTE *pDestBuf;
+	pSrcBuf = pSrc;
+	pDestBuf = pOut;
+	//   BYTE*pDstYUV;
+	//-- 1280x1024 0->720X576
+	pSrcBuf = pSrcBuf + 224 * in_w * 2;
+	for (y = 0; y < out_h;) {
+		memcpy(pDestBuf, pSrcBuf + 280 * 2, out_w * 2);
+		pSrcBuf += in_w * 2;
+		pDestBuf += out_w * 2;
+		y = y + 1;
+	}
+}
+
+static void V1280X1024_NTSC_Scaler(BYTE *pSrc, BYTE *pOut, int in_w, int in_h,
+			    int out_w, int out_h)
+{
+	int y;
+	BYTE *pSrcBuf;
+	BYTE *pDestBuf;
+	pSrcBuf = pSrc;
+	pDestBuf = pOut;
+	//   BYTE*pDstYUV;
+	//-- 1280X1024 0->720X480
+	pSrcBuf = pSrcBuf + 272 * in_w * 2;
+	for (y = 0; y < out_h;) {
+		memcpy(pDestBuf, pSrcBuf + 280 * 2, out_w * 2);
+		pSrcBuf += in_w * 2;
+		pDestBuf += out_w * 2;
+		y = y + 1;
+	}
+}
