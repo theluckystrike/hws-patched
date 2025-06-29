@@ -246,121 +246,163 @@ void InitVideoSys(struct hws_pcie_dev *pdx, int set)
 	//--------------------------------------------------
 }
 
+/* ──────────────────────────────────────────────────────────────── */
+/* Utility: compare-and-write to a 32-bit register only if needed  */
+/* ──────────────────────────────────────────────────────────────── */
+static inline void write_if_diff(struct hws_pcie_dev *pdx,
+                                 u32 reg_addr, u32 new_val)
+{
+    if (READ_REGISTER_ULONG(pdx, reg_addr) != new_val)
+        WRITE_REGISTER_ULONG(pdx, reg_addr, new_val);
+}
+
+/* ──────────────────────────────────────────────────────────────── */
+/* 0. HPD / +5 V                                                   */
+/* ──────────────────────────────────────────────────────────────── */
+static bool update_hpd_status(struct hws_pcie_dev *pdx, unsigned int ch)
+{
+    u32  hpd    = hws_read_port_hpd(pdx, ch);   /* jack-level status   */
+    bool power  = !!(hpd & HWS_5V_BIT);         /* +5 V present        */
+    bool hpd_hi = !!(hpd & HWS_HPD_BIT);        /* HPD line asserted   */
+
+    /* Cache the +5 V state in V4L2 ctrl core (only when it changes) */
+    if (power != pdx->video[ch].detect_tx_5v_ctrl->cur.val)
+        v4l2_ctrl_s_ctrl(pdx->video[ch].detect_tx_5v_ctrl, power);
+
+    /* “Signal present” means *both* rails up. Tweak if your HW differs. */
+    return power && hpd_hi;
+}
+
+/* ──────────────────────────────────────────────────────────────── */
+/* 1. Active / interlace flags                                     */
+/* ──────────────────────────────────────────────────────────────── */
+static bool update_active_and_interlace_flags(struct hws_pcie_dev *pdx,
+                                              unsigned int ch)
+{
+    u32  reg        = READ_REGISTER_ULONG(pdx, HWS_REG_ACTIVE_STATUS);
+    bool active_vid = !!((reg >> ch) & 0x01);
+    bool interlace  = !!(((reg >> 8) >> ch) & 0x01);
+
+    /* Track interlace in driver state so other paths don’t re-decode */
+    pdx->m_pVCAPStatus[ch][0].dwinterlace = interlace;
+
+    return active_vid;               /* false → “no video” early-out   */
+}
+
+/* ──────────────────────────────────────────────────────────────── */
+/* 2a. Modern devices (HW version > 0)                              */
+/* ──────────────────────────────────────────────────────────────── */
+static void handle_hwv2_path(struct hws_pcie_dev *pdx, unsigned int ch)
+{
+    /* ── frame-rate in ─────────────────────────────────────────── */
+    u32 frame_rate = READ_REGISTER_ULONG(pdx, HWS_REG_FRAME_RATE(ch));
+    pdx->m_pVCAPStatus[ch][0].dwFrameRate = frame_rate;
+
+    /* ── output resolution (programmed) ────────────────────────── */
+    u32 reg          = READ_REGISTER_ULONG(pdx, HWS_REG_OUT_RES(ch));
+    u16 out_res_w    =  reg        & 0xFFFF;
+    u16 out_res_h    = (reg >> 16) & 0xFFFF;
+
+    if (out_res_w != pdx->m_pVCAPStatus[ch][0].dwOutWidth ||
+        out_res_h != pdx->m_pVCAPStatus[ch][0].dwOutHeight)
+    {
+        u32 packed =  (pdx->m_pVCAPStatus[ch][0].dwOutHeight << 16) |
+                       pdx->m_pVCAPStatus[ch][0].dwOutWidth;
+        write_if_diff(pdx, HWS_REG_OUT_RES(ch), packed);
+    }
+
+    /* ── output frame-rate (programmed) ────────────────────────── */
+    u32 out_fps = READ_REGISTER_ULONG(pdx, HWS_REG_OUT_FRAME_RATE(ch));
+    if (out_fps != pdx->m_pVCAPStatus[ch][0].dwOutFrameRate)
+        write_if_diff(pdx, HWS_REG_OUT_FRAME_RATE(ch),
+                           pdx->m_pVCAPStatus[ch][0].dwOutFrameRate);
+
+    /* ── BCHS (brightness/contrast/hue/saturation) ─────────────── */
+    reg = READ_REGISTER_ULONG(pdx, HWS_REG_BCHS(ch));
+    u8 br =  reg        & 0xFF;
+    u8 co = (reg >> 8)  & 0xFF;
+    u8 hu = (reg >> 16) & 0xFF;
+    u8 sa = (reg >> 24) & 0xFF;
+
+    if (br != pdx->m_brightness[ch] ||
+        co != pdx->m_contrast[ch]   ||
+        hu != pdx->m_hue[ch]        ||
+        sa != pdx->m_saturation[ch])
+    {
+        u32 packed =  (pdx->m_saturation[ch] << 24) |
+                      (pdx->m_hue[ch]        << 16) |
+                      (pdx->m_contrast[ch]   <<  8) |
+                       pdx->m_brightness[ch];
+        write_if_diff(pdx, HWS_REG_BCHS(ch), packed);
+    }
+
+    /* ── HDCP detect bit ───────────────────────────────────────── */
+    reg = READ_REGISTER_ULONG(pdx, HWS_REG_HDCP_STATUS);
+    pdx->m_pVCAPStatus[ch][0].dwhdcp = !!((reg >> ch) & 0x01);
+}
+
+/* ──────────────────────────────────────────────────────────────── */
+/* 2b. Legacy devices (SW FPS estimator)                           */
+/* ──────────────────────────────────────────────────────────────── */
+static void handle_legacy_path(struct hws_pcie_dev *pdx, unsigned int ch)
+{
+    u32 sw_rate = pdx->m_dwSWFrameRate[ch];
+
+    if (sw_rate > 10) {
+        int fps;
+        if      (sw_rate > 55 * 2) fps = 60;
+        else if (sw_rate > 45 * 2) fps = 50;
+        else if (sw_rate > 25 * 2) fps = 30;
+        else if (sw_rate > 20 * 2) fps = 25;
+        else                       fps = 60;  /* default fallback */
+
+        pdx->m_pVCAPStatus[ch][0].dwFrameRate = fps;
+    }
+
+    pdx->m_dwSWFrameRate[ch] = 0;        /* reset estimator window */
+}
+
+/* ──────────────────────────────────────────────────────────────── */
+/* 3. Live input resolution + ChangeVideoSize() trigger            */
+/* ──────────────────────────────────────────────────────────────── */
+static void update_live_resolution(struct hws_pcie_dev *pdx, unsigned int ch)
+{
+    u32 reg   = READ_REGISTER_ULONG(pdx, HWS_REG_IN_RES(ch));
+    u16 res_w =  reg        & 0xFFFF;
+    u16 res_h = (reg >> 16) & 0xFFFF;
+
+    bool interlace = pdx->m_pVCAPStatus[ch][0].dwinterlace;
+
+    bool within_hw =
+        (res_w <= MAX_VIDEO_HW_W) &&
+        ((!interlace &&  res_h      <= MAX_VIDEO_HW_H) ||
+         ( interlace && (res_h * 2) <= MAX_VIDEO_HW_H));
+
+    bool changed =
+        (res_w      != pdx->m_pVCAPStatus[ch][0].dwWidth) ||
+        (res_h      != pdx->m_pVCAPStatus[ch][0].dwHeight)||
+        (interlace  != pdx->m_pVCAPStatus[ch][0].dwinterlace);
+
+    if (within_hw && changed)
+        ChangeVideoSize(pdx, ch, res_w, res_h, interlace);
+}
+
 int Get_Video_Status(struct hws_pcie_dev *pdx, unsigned int ch)
 {
-	u32 reg;
-	int res_w = 0, res_h = 0;
-	int out_res_w = 0, out_res_h = 0;
-	int frame_rate = 0, out_frame_rate = 0;
-	int active_video, interlace, no_video = 1, video_hdcp;
-	u8 br, co, hu, sa;
-	int out_val;
+    if (!update_hpd_status(pdx, ch))
+        return 1;                         /* no +5 V / HPD */
 
-	/* ── 0. HPD / +5 V status ------------------------------------------------- */
-	{
-		u32 hpd =
-			hws_read_port_hpd(pdx, ch); /* ch == HDMI jack index */
-		bool power = !!(hpd & HWS_5V_BIT);
-		bool hpd_hi = !!(hpd & HWS_HPD_BIT);
+    if (!update_active_and_interlace_flags(pdx, ch))
+        return 1;                         /* no active video */
 
-		/* cache & push to ctrl core only on change */
-		if (power != pdx->video[ch].detect_tx_5v_ctrl->cur.val) {
-			v4l2_ctrl_s_ctrl(pdx->video[ch].detect_tx_5v_ctrl, power);
-		}
-	}
+    if (pdx->m_DeviceHW_Version > 0)
+        handle_hwv2_path(pdx, ch);
+    else
+        handle_legacy_path(pdx, ch);
 
-	/* ── 1. signal present / interlace flags ─────────────────────────── */
-	reg = READ_REGISTER_ULONG(pdx, HWS_REG_ACTIVE_STATUS);
-	active_video = (reg >> ch) & 0x01;
-	interlace = ((reg >> 8) >> ch) & 0x01;
+    update_live_resolution(pdx, ch);
 
-	if (!active_video)
-		return 1; /* No signal on this channel */
-
-	no_video = 0; /* we do have video           */
-
-	/* ── 2. device-specific path (HW rev > 0) ─────────────────────────── */
-	if (pdx->m_DeviceHW_Version > 0) {
-		/* input frame-rate */
-		frame_rate = READ_REGISTER_ULONG(pdx, HWS_REG_FRAME_RATE(ch));
-		if (frame_rate != pdx->m_pVCAPStatus[ch][0].dwFrameRate)
-			pdx->m_pVCAPStatus[ch][0].dwFrameRate = frame_rate;
-
-		/* programmed output resolution */
-		reg = READ_REGISTER_ULONG(pdx, HWS_REG_OUT_RES(ch));
-		out_res_w = reg & 0xFFFF;
-		out_res_h = (reg >> 16) & 0xFFFF;
-
-		if (out_res_w != pdx->m_pVCAPStatus[ch][0].dwOutWidth ||
-		    out_res_h != pdx->m_pVCAPStatus[ch][0].dwOutHeight) {
-			out_val = pdx->m_pVCAPStatus[ch][0].dwOutHeight;
-			out_val = (out_val << 16) |
-				  pdx->m_pVCAPStatus[ch][0].dwOutWidth;
-			WRITE_REGISTER_ULONG(pdx, HWS_REG_OUT_RES(ch), out_val);
-		}
-
-		/* programmed output fps */
-		out_frame_rate =
-			READ_REGISTER_ULONG(pdx, HWS_REG_OUT_FRAME_RATE(ch));
-		if (out_frame_rate != pdx->m_pVCAPStatus[ch][0].dwOutFrameRate)
-			WRITE_REGISTER_ULONG(
-				pdx, HWS_REG_OUT_FRAME_RATE(ch),
-				pdx->m_pVCAPStatus[ch][0].dwOutFrameRate);
-
-		/* BCHS controls packed B|C|H|S */
-		reg = READ_REGISTER_ULONG(pdx, HWS_REG_BCHS(ch));
-		br = reg & 0xFF;
-		co = (reg >> 8) & 0xFF;
-		hu = (reg >> 16) & 0xFF;
-		sa = (reg >> 24) & 0xFF;
-
-		if (br != pdx->m_brightness[ch] || co != pdx->m_contrast[ch] ||
-		    hu != pdx->m_hue[ch] || sa != pdx->m_saturation[ch]) {
-			out_val = pdx->m_saturation[ch];
-			out_val = (out_val << 8) | pdx->m_hue[ch];
-			out_val = (out_val << 8) | pdx->m_contrast[ch];
-			out_val = (out_val << 8) | pdx->m_brightness[ch];
-			WRITE_REGISTER_ULONG(pdx, HWS_REG_BCHS(ch), out_val);
-		}
-
-		/* HDCP detect bit */
-		reg = READ_REGISTER_ULONG(pdx, HWS_REG_HDCP_STATUS);
-		video_hdcp = (reg >> ch) & 0x01;
-		pdx->m_pVCAPStatus[ch][0].dwhdcp = video_hdcp;
-
-	} else { /* ── 3. legacy SW fps estimator ────────────────────────── */
-		if (pdx->m_dwSWFrameRate[ch] > 10) {
-			int fps = 60;
-			if (pdx->m_dwSWFrameRate[ch] > 55 * 2)
-				fps = 60;
-			else if (pdx->m_dwSWFrameRate[ch] > 45 * 2)
-				fps = 50;
-			else if (pdx->m_dwSWFrameRate[ch] > 25 * 2)
-				fps = 30;
-			else if (pdx->m_dwSWFrameRate[ch] > 20 * 2)
-				fps = 25;
-			pdx->m_pVCAPStatus[ch][0].dwFrameRate = fps;
-		}
-		pdx->m_dwSWFrameRate[ch] = 0;
-	}
-
-	/* ── 4. live input resolution check ──────────────────────────────── */
-	reg = READ_REGISTER_ULONG(pdx, HWS_REG_IN_RES(ch));
-	res_w = reg & 0xFFFF;
-	res_h = (reg >> 16) & 0xFFFF;
-
-	if (((res_w <= MAX_VIDEO_HW_W) && (res_h <= MAX_VIDEO_HW_H) &&
-	     !interlace) ||
-	    ((res_w <= MAX_VIDEO_HW_W) && (res_h * 2 <= MAX_VIDEO_HW_H) &&
-	     interlace)) {
-		if (res_w != pdx->m_pVCAPStatus[ch][0].dwWidth ||
-		    res_h != pdx->m_pVCAPStatus[ch][0].dwHeight ||
-		    interlace != pdx->m_pVCAPStatus[ch][0].dwinterlace) {
-			ChangeVideoSize(pdx, ch, res_w, res_h, interlace);
-		}
-	}
-
-	return no_video; /* 0 = OK, 1 = no signal */
+    return 0;                             /* success */
 }
 
 int MemCopyVideoToSteam(struct hws_pcie_dev *pdx, int nDecoder)
