@@ -44,8 +44,27 @@ static inline void nv12_chunk_to_yuy2(u8 *dst,
                                       const u8 *uv8,
                                       bool swap_uv)
 {
-        copy_luma_16(dst,     y16);          /* y0-y15  */
-        copy_chroma_8(dst, uv8, swap_uv);    /* two UV pairs */
+        /* copy 16 luma bytes */
+        dst[ 0]=y16[ 0]; dst[ 2]=y16[ 1];
+        dst[ 4]=y16[ 2]; dst[ 6]=y16[ 3];
+        dst[ 8]=y16[ 8]; dst[10]=y16[ 9];
+        dst[12]=y16[10]; dst[14]=y16[11];
+
+        dst[16]=y16[12]; dst[18]=y16[13];
+        dst[20]=y16[14]; dst[22]=y16[15];
+        dst[24]=y16[20]; dst[26]=y16[21];
+        dst[28]=y16[22]; dst[30]=y16[23];
+
+        /* copy two UV pairs, optionally swapping the pair order   */
+        const u8 *u0 = swap_uv ? uv8+2 : uv8;
+        const u8 *v0 = swap_uv ? uv8   : uv8+2;
+
+        dst[ 1]=u0[0]; dst[ 3]=v0[0];
+        dst[ 5]=u0[1]; dst[ 7]=v0[1];
+        dst[17]=u0[4]; dst[19]=v0[4];
+        dst[21]=u0[5]; dst[23]=v0[5];
+        dst[25]=u0[6]; dst[27]=v0[6];
+        dst[29]=u0[7]; dst[31]=v0[7];
 }
 
 
@@ -228,5 +247,63 @@ static void modify_luma_only(const u8 *y_src,
                 dst[0] = y_src[x];   /* write Y  */
                 dst    += 2;         /* skip UV byte */
         }
+}
+
+
+static void yuu2_progressive(u8 *src,u8 *dst,u16 w,u16 h)
+{
+        const u16 pitch   = w * 12 / 8;      /* NV12 line stride   */
+        const u16 packets = pitch / 24;      /* #chunks per line   */
+
+        for (u16 line=0; line<h; ++line) {
+                bool swap_uv   = (line & 1);
+                u8  *dst_line  = dst + line * w * 2;
+                const u8 *y16  = src + line * pitch;
+                const u8 *uv8  = y16 + w;
+
+                for (u16 p=0; p<packets; ++p) {
+                        nv12_chunk_to_yuy2(dst_line, y16, uv8, swap_uv);
+                        dst_line += 32; y16 += 24; uv8 += 24;
+                }
+        }
+
+        /* add one black guard line at bottom – matches old code   */
+        black_line(dst + (h-1)*w*2, w);
+}
+
+/* ───────────────── interlaced ───────────────────────────────── */
+static void yuu2_interlaced(u8 *src,u8 *dst,u16 w,u16 h)
+{
+        const u16 pitch   = w * 12 / 8;
+        const u16 packets = pitch / 24;
+        const u16 half    = h >> 1;          /* only half the lines */
+
+        for (u16 line=0; line<half; ++line) {
+                bool swap_uv  = (line & 1);
+                u8  *dst_even = dst + line*2*w*2;  /* write two lines */
+                const u8 *y16 = src + line*pitch;
+                const u8 *uv8 = y16 + w;
+
+                for (u16 p=0; p<packets; ++p) {
+                        nv12_chunk_to_yuy2(dst_even, y16, uv8, swap_uv);
+                        memcpy(dst_even + w*2, dst_even, 32); /* duplicate */
+                        dst_even += 32; y16 += 24; uv8 += 24;
+                }
+                /* duplicate remainder of the line (w*2 – packets*32) */
+                memcpy(dst_even + w*2, dst_even, (w*2) - packets*32);
+        }
+
+        /* two black bottom lines – old behaviour */
+        black_line(dst + (h-2)*w*2, w);
+        black_line(dst + (h-1)*w*2, w);
+}
+
+/* ───────────────── public entry ─────────────────────────────── */
+void yv12_to_yuy2(u8 *src,u8 *dst,int w,int h,int interlace)
+{
+        if (interlace)
+                yuu2_interlaced(src, dst, (u16)w, (u16)h);
+        else
+                yuu2_progressive(src, dst, (u16)w, (u16)h);
 }
 
