@@ -204,7 +204,8 @@ typedef struct TAG_VCAP_STATUS_INFO
 	DWORD       dwOutFrameRate;
 	DWORD	    dwinterlace;
 	DWORD       dwhdcp;
-}VCAP_STATUS_INFO, *PVCAP_STATUS_INFO;
+} VCAP_STATUS_INFO, *PVCAP_STATUS_INFO;
+
 typedef struct 
 {
 	uint8_t		*m_pVideoBufData[MAX_VIDEO_QUEUE];
@@ -222,7 +223,7 @@ typedef struct
 	BYTE        *m_pVideoYUV2Buf;
 	BYTE        *m_pRotateVideoBuf;
 	DWORD		dwisRuning;
-}ACAP_VIDEO_INFO, *PACAP_VIDEO_INFO;
+} ACAP_VIDEO_INFO, *PACAP_VIDEO_INFO;
 
 typedef struct 
 {

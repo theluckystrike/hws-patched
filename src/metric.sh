@@ -7,7 +7,7 @@
 set -euo pipefail
 
 MAKEFILE=Makefile
-CSV_OUT=metrics.csv
+# CSV_OUT=metrics.csv
 FUNCREG='^[[:space:]]*[A-Za-z_][A-Za-z0-9_[:space:]*]*[(][^;]*[)][[:space:]]*[{][[:space:]]*$'
 
 # Colours only if we’re on a TTY
@@ -20,7 +20,7 @@ fi
 printf "%-25s %6s %6s %6s %6s %6s %7s %7s %7s %7s %7s\n" \
   File srcLOC hdrLOC Ratio Funcs AvgFn MaxFn CCX maxCCX Callers
 echo "-------------------------------------------------------------------------------------------------------------"
-echo "file,src_loc,hdr_loc,ratio,funcs,avg_fn,max_fn,ccx,max_ccx,callers" > "$CSV_OUT"
+# echo "file,src_loc,hdr_loc,ratio,funcs,avg_fn,max_fn,ccx,max_ccx,callers" > "$CSV_OUT"
 
 # ------------------------------------------------------------------------
 # Tags for caller count (ignore if ctags missing)
@@ -92,9 +92,9 @@ EOF
     "$srcLOC" "$hdrLOC" "$ratio" "$funcs" "$avgfn" "$maxfn" \
     "$ccx" "$maxccx" "$callers"
 
-  echo "$src,$srcLOC,$hdrLOC,$ratio,$funcs,$avgfn,$maxfn,$ccx,$maxccx,$callers" >> "$CSV_OUT"
+  # echo "$src,$srcLOC,$hdrLOC,$ratio,$funcs,$avgfn,$maxfn,$ccx,$maxccx,$callers" >> "$CSV_OUT"
 done
 
 rm -f .tags.tmp
-echo -e "\nCSV written to $CSV_OUT"
+# echo -e "\nCSV written to $CSV_OUT"
 

@@ -1,4 +1,6 @@
 #include "hws_video_pipeline.h"
+
+#include "hws.h"
 #include "hws_reg.h"
 #include "hws_pci.h"
 #include "hws_scaler.h"
@@ -10,7 +12,7 @@
 
 struct copy_ctx {
     u8  *pSrc;           /* DMA source pointer          */
-    u8  *pMask;          /* mask at end of this block   */
+    u32  *pMask;          /* mask at end of this block   */
     int pitch;           /* bytes / line                */
     int copy_sz;         /* bytes in this half          */
     int half_sz;         /* bytes in *half* of frame    */
@@ -461,11 +463,11 @@ static bool mask_skip_this_half(struct hws_pcie_dev *pdx, int dec,
 static u8 *get_write_buf(struct hws_pcie_dev *pdx, int dec,
                          struct copy_ctx *c)
 {
-    struct video_queue *vq = &pdx->m_VideoInfo[dec];
+    ACAP_VIDEO_INFO *vq = &pdx->m_VideoInfo[dec];
     int  idx = -1;
 
     if (c->buf_idx == 1) {        /* first half -> lock only if free */
-        if (vq->pStatusInfo[vq->m_nVideoIndex]->byLock == MEM_UNLOCK)
+        if (vq->pStatusInfo[vq->m_nVideoIndex].byLock == MEM_UNLOCK)
             idx = vq->m_nVideoIndex;
     } else {                      /* always take second half */
         idx = vq->m_nVideoIndex;
@@ -473,7 +475,7 @@ static u8 *get_write_buf(struct hws_pcie_dev *pdx, int dec,
 
     /* fallback in case we never advanced */
     if (idx == -1) {
-        vq->pStatusInfo[vq->m_nVideoIndex]->byLock = MEM_UNLOCK;
+        vq->pStatusInfo[vq->m_nVideoIndex].byLock = MEM_UNLOCK;
         idx = vq->m_nVideoIndex;
     }
 
@@ -496,17 +498,17 @@ static void copy_and_update(struct hws_pcie_dev *pdx, int dec,
         unsigned long flags;
         spin_lock_irqsave(&pdx->videoslock[dec], flags);
 
-        struct video_queue *vq = &pdx->m_VideoInfo[dec];
+        ACAP_VIDEO_INFO *vq = &pdx->m_VideoInfo[dec];
         int idx = vq->m_nVideoIndex;
 
         vq->m_nVideoIndex = (idx + 1) % MAX_VIDEO_QUEUE;
 
-        vq->pStatusInfo[idx]->dwWidth      =
+        vq->pStatusInfo[idx].dwWidth      =
             pdx->m_pVCAPStatus[dec][0].dwWidth;
-        vq->pStatusInfo[idx]->dwHeight     =
+        vq->pStatusInfo[idx].dwHeight     =
             pdx->m_pVCAPStatus[dec][0].dwHeight;
-        vq->pStatusInfo[idx]->dwinterlace  = c->interlace;
-        vq->pStatusInfo[idx]->byLock       = MEM_LOCK;
+        vq->pStatusInfo[idx].dwinterlace  = c->interlace;
+        vq->pStatusInfo[idx].byLock       = MEM_LOCK;
 
         spin_unlock_irqrestore(&pdx->videoslock[dec], flags);
     } else {
