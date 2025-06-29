@@ -6,6 +6,19 @@
 #include "hws_dma.h"
 #include "hws_audio_pipeline.h"
 
+#define FRAME_DONE_MARK 0x55AAAA55
+
+struct copy_ctx {
+    u8  *pSrc;           /* DMA source pointer          */
+    u8  *pMask;          /* mask at end of this block   */
+    int pitch;           /* bytes / line                */
+    int copy_sz;         /* bytes in this half          */
+    int half_sz;         /* bytes in *half* of frame    */
+    int buf_idx;         /* 0 = 2nd half, 1 = 1st half  */
+    bool interlace;
+};
+
+
 static inline u32 hws_read_port_hpd(struct hws_pcie_dev *pdx, int port)
 {
 	/* OR the two pipes that belong to this HDMI jack */
@@ -405,151 +418,140 @@ int Get_Video_Status(struct hws_pcie_dev *pdx, unsigned int ch)
     return 0;                             /* success */
 }
 
-int MemCopyVideoToSteam(struct hws_pcie_dev *pdx, int nDecoder)
+
+static inline bool frame_dims_ok(struct hws_pcie_dev *pdx, int dec)
 {
-	int nIndex = -1;
-	//int i=0 ;
-	int status = -1;
-	BYTE *bBuf = NULL;
-	BYTE *pSrcBuf = NULL;
-	BYTE *pDmaSrcBuf = NULL;
-	int dwSrcPitch;
-	//int dwMaskPitch;
-	int copysize;
-	int nw, nh;
-	int interlace;
-	int mVideoBufIndex;
-	int halfsize;
-	int *pMask;
-	int line_cnt = 0;
-	unsigned long flags;
-
-	nw = pdx->m_pVCAPStatus[nDecoder][0].dwWidth;
-	nh = pdx->m_pVCAPStatus[nDecoder][0].dwHeight;
-	if ((nw < 0) || (nh < 0) || (nw > MAX_VIDEO_HW_W) ||
-	    (nh > MAX_VIDEO_HW_H)) {
-		return -1;
-	}
-	mVideoBufIndex = pdx->m_nVideoBufferIndex[nDecoder];
-	interlace = pdx->m_pVCAPStatus[nDecoder][0].dwinterlace;
-	if (pdx->m_Device_SupportYV12 == 1) {
-		dwSrcPitch = nw * 12 / 8;
-	} else {
-		dwSrcPitch = nw * 2;
-	}
-	if (mVideoBufIndex == 1) {
-		pDmaSrcBuf = pdx->m_pbyVideoBuffer[nDecoder];
-		copysize = pdx->m_format[nDecoder].HLAF_SIZE;
-		line_cnt = copysize / dwSrcPitch;
-		halfsize = copysize;
-	} else {
-		copysize = pdx->m_format[nDecoder].HLAF_SIZE;
-		pDmaSrcBuf = pdx->m_pbyVideoBuffer[nDecoder] + copysize;
-		halfsize = copysize;
-		copysize = pdx->m_format[nDecoder].DWON_SIZE;
-		line_cnt = copysize / dwSrcPitch;
-	}
-	pMask = (int *)(pDmaSrcBuf + (copysize - (line_cnt - 2) * dwSrcPitch));
-	if (*pMask == 0x55AAAA55) {
-		//DbgPrint("########-*pMask-[ch=%d][index=%d]Mark=%X[%d-%d]-[%d,%d]\n",nDecoder, mVideoBufIndex,*pMask,nw,nh,line_cnt,copysize);
-		//------------------------------
-		if (pdx->m_nVideoHalfDone[nDecoder] == 1) {
-			pdx->m_nVideoHalfDone[nDecoder] = 0;
-		}
-		//------------------------------
-		return -1;
-	} else {
-		if (mVideoBufIndex == 0) {
-			if (pdx->m_nVideoHalfDone[nDecoder] == 0) {
-				//DbgPrint("X1:HLAF ########-*pMask- [%d] [%d]\n",nDecoder,mVideoBufIndex);
-				*pMask = 0x55AAAA55;
-				return -1;
-			} else {
-				pdx->m_nVideoHalfDone[nDecoder] = 0;
-			}
-		} else {
-			pdx->m_nVideoHalfDone[nDecoder] = 1;
-		}
-	}
-	//-------------------------------
-	if (pdx->m_VideoInfo[nDecoder].dwisRuning == 1) {
-		nIndex = -1;
-		pSrcBuf = pDmaSrcBuf;
-		bBuf = NULL;
-		if (mVideoBufIndex == 1) {
-			if (pdx->m_VideoInfo[nDecoder]
-				    .pStatusInfo[pdx->m_VideoInfo[nDecoder]
-							 .m_nVideoIndex]
-				    .byLock == MEM_UNLOCK) {
-				nIndex =
-					pdx->m_VideoInfo[nDecoder].m_nVideoIndex;
-				bBuf = pdx->m_VideoInfo[nDecoder]
-					       .m_pVideoBufData[nIndex];
-			}
-		} else {
-			nIndex = pdx->m_VideoInfo[nDecoder].m_nVideoIndex;
-			bBuf = pdx->m_VideoInfo[nDecoder]
-				       .m_pVideoBufData[nIndex];
-		}
-		if (nIndex == -1) {
-			pdx->m_VideoInfo[nDecoder]
-				.pStatusInfo[pdx->m_VideoInfo[nDecoder]
-						     .m_nVideoIndex]
-				.byLock = MEM_UNLOCK;
-			nIndex = pdx->m_VideoInfo[nDecoder].m_nVideoIndex;
-			bBuf = pdx->m_VideoInfo[nDecoder]
-				       .m_pVideoBufData[nIndex];
-		}
-		if (nIndex != -1 && bBuf) {
-			if (mVideoBufIndex == 0) {
-				bBuf += halfsize;
-			}
-			//pci_dma_sync_single_for_cpu(pdx->pdev,pdx->m_pbyVideo_phys[nDecoder],pdx->m_MaxHWVideoBufferSize,2);
-			dma_sync_single_for_cpu(&pdx->pdev->dev,
-						pdx->m_pbyVideo_phys[nDecoder],
-						pdx->m_MaxHWVideoBufferSize, 2);
-			memcpy(bBuf, pSrcBuf, copysize);
-
-			if (mVideoBufIndex == 0) {
-				status = 0;
-				spin_lock_irqsave(&pdx->videoslock[nDecoder],
-						  flags);
-
-				pdx->m_VideoInfo[nDecoder].m_nVideoIndex =
-					nIndex + 1;
-				if (pdx->m_VideoInfo[nDecoder].m_nVideoIndex >=
-				    MAX_VIDEO_QUEUE) {
-					pdx->m_VideoInfo[nDecoder]
-						.m_nVideoIndex = 0;
-				}
-				pdx->m_VideoInfo[nDecoder]
-					.pStatusInfo[nIndex]
-					.dwWidth =
-					pdx->m_pVCAPStatus[nDecoder][0].dwWidth;
-				pdx->m_VideoInfo[nDecoder]
-					.pStatusInfo[nIndex]
-					.dwHeight =
-					pdx->m_pVCAPStatus[nDecoder][0].dwHeight;
-				pdx->m_VideoInfo[nDecoder]
-					.pStatusInfo[nIndex]
-					.dwinterlace = interlace;
-				pdx->m_VideoInfo[nDecoder]
-					.pStatusInfo[nIndex]
-					.byLock = MEM_LOCK;
-
-				spin_unlock_irqrestore(
-					&pdx->videoslock[nDecoder], flags);
-			}
-
-		} else {
-			//printk("No Buffer Write %d",nDecoder);
-			//queue_work(pdx->wq,&pdx->video[nDecoder].videowork);
-			pdx->m_nVideoHalfDone[nDecoder] = 0;
-		}
-	}
-	*pMask = 0x55AAAA55;
-	return 0;
+    int w = pdx->m_pVCAPStatus[dec][0].dwWidth;
+    int h = pdx->m_pVCAPStatus[dec][0].dwHeight;
+    return (w > 0 && h > 0 &&
+            w <= MAX_VIDEO_HW_W && h <= MAX_VIDEO_HW_H);
 }
+
+static void init_copy_ctx(struct hws_pcie_dev *pdx, int dec,
+                          struct copy_ctx *c)
+{
+    int w  = pdx->m_pVCAPStatus[dec][0].dwWidth;
+    c->interlace = pdx->m_pVCAPStatus[dec][0].dwinterlace;
+    c->pitch     = pdx->m_Device_SupportYV12 ? w * 12 / 8 : w * 2;
+
+    c->buf_idx   = pdx->m_nVideoBufferIndex[dec];
+    c->half_sz   = pdx->m_format[dec].HLAF_SIZE;
+    c->copy_sz   = (c->buf_idx == 1) ? c->half_sz
+                      : pdx->m_format[dec].DWON_SIZE;
+
+    u8 *base     = pdx->m_pbyVideoBuffer[dec];
+    c->pSrc      = base + (c->buf_idx ? 0 : c->half_sz);
+    int lines    = c->copy_sz / c->pitch;
+    c->pMask     = (int *)(c->pSrc + c->copy_sz -
+                           (lines - 2) * c->pitch);
+}
+
+static bool mask_skip_this_half(struct hws_pcie_dev *pdx, int dec,
+                                struct copy_ctx *c)
+{
+    if (*c->pMask != FRAME_DONE_MARK)
+        return false;                     /* ready to consume   */
+
+    /* mask already set  → update half-done bookkeeping */
+    if (pdx->m_nVideoHalfDone[dec])
+        pdx->m_nVideoHalfDone[dec] = 0;
+    return true;                          /* skip copy */
+}
+
+static u8 *get_write_buf(struct hws_pcie_dev *pdx, int dec,
+                         struct copy_ctx *c)
+{
+    struct video_queue *vq = &pdx->m_VideoInfo[dec];
+    int  idx = -1;
+
+    if (c->buf_idx == 1) {        /* first half -> lock only if free */
+        if (vq->pStatusInfo[vq->m_nVideoIndex]->byLock == MEM_UNLOCK)
+            idx = vq->m_nVideoIndex;
+    } else {                      /* always take second half */
+        idx = vq->m_nVideoIndex;
+    }
+
+    /* fallback in case we never advanced */
+    if (idx == -1) {
+        vq->pStatusInfo[vq->m_nVideoIndex]->byLock = MEM_UNLOCK;
+        idx = vq->m_nVideoIndex;
+    }
+
+    return (idx != -1) ? vq->m_pVideoBufData[idx] : NULL;
+}
+
+static void copy_and_update(struct hws_pcie_dev *pdx, int dec,
+                            u8 *dst, struct copy_ctx *c)
+{
+    if (c->buf_idx == 0)          /* second half writes at +half_sz  */
+        dst += c->half_sz;
+
+    dma_sync_single_for_cpu(&pdx->pdev->dev,
+                            pdx->m_pbyVideo_phys[dec],
+                            pdx->m_MaxHWVideoBufferSize,
+                            DMA_FROM_DEVICE);
+    memcpy(dst, c->pSrc, c->copy_sz);
+
+    if (c->buf_idx == 0) {        /* finished full frame – rotate Q  */
+        unsigned long flags;
+        spin_lock_irqsave(&pdx->videoslock[dec], flags);
+
+        struct video_queue *vq = &pdx->m_VideoInfo[dec];
+        int idx = vq->m_nVideoIndex;
+
+        vq->m_nVideoIndex = (idx + 1) % MAX_VIDEO_QUEUE;
+
+        vq->pStatusInfo[idx]->dwWidth      =
+            pdx->m_pVCAPStatus[dec][0].dwWidth;
+        vq->pStatusInfo[idx]->dwHeight     =
+            pdx->m_pVCAPStatus[dec][0].dwHeight;
+        vq->pStatusInfo[idx]->dwinterlace  = c->interlace;
+        vq->pStatusInfo[idx]->byLock       = MEM_LOCK;
+
+        spin_unlock_irqrestore(&pdx->videoslock[dec], flags);
+    } else {
+        pdx->m_nVideoHalfDone[dec] = 1;   /* first half done  */
+    }
+}
+
+
+int MemCopyVideoToStream(struct hws_pcie_dev *pdx, int dec)
+{
+    /* 0. fast validation ─────────────────────────────────────────── */
+    if (!frame_dims_ok(pdx, dec))
+        return -1;
+
+    /* 1. derive pitches, offsets, mask ptr, half/whole flags ─────── */
+    struct copy_ctx ctx;
+    init_copy_ctx(pdx, dec, &ctx);
+
+    /* 2. drop out early when mask says “frame not ready” ─────────── */
+    if (mask_skip_this_half(pdx, dec, &ctx))
+        return -1;
+
+    /* 3. if capture engine isn’t running just stamp the mask & quit */
+    if (!pdx->m_VideoInfo[dec].dwisRuning) {
+        *ctx.pMask = FRAME_DONE_MARK;
+        return 0;
+    }
+
+    /* 4. lock & obtain destination buffer ‐ returns NULL on miss    */
+    u8 *dst = get_write_buf(pdx, dec, &ctx);
+    if (!dst) {                     /* no free buffer this pass */
+        pdx->m_nVideoHalfDone[dec] = 0;
+        *ctx.pMask = FRAME_DONE_MARK;
+        return 0;
+    }
+
+    /* 5. copy + optional metadata update for first half ─────────── */
+    copy_and_update(pdx, dec, dst, &ctx);
+
+    /* 6. stamp mask so HW/ISR knows this block is consumed ───────── */
+    *ctx.pMask = FRAME_DONE_MARK;
+    return 0;
+}
+
+
 
 void video_data_process(struct work_struct *p_work)
 {
