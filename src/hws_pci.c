@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 #include "hws_pci.h"
 
 #include <media/v4l2-ctrls.h>
@@ -5,7 +6,6 @@
 #include "hws.h"
 #include "hws_init.h"
 #include "hws_dma.h"
-#include "hws_v4l2_ioctl.h"
 #include "hws_video_pipeline.h"
 #include "hws_audio_pipeline.h"
 #include "hws_interrupt.h"

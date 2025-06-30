@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 #include "hws_interrupt.h"
 #include "hws_pci.h"
 #include "hws_reg.h"

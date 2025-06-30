@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 #ifndef HWS_INTERRUPT_H
 #define HWS_INTERRUPT_H
 

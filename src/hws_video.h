@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 #ifndef HWS_VIDEO_H
 #define HWS_VIDEO_H
 

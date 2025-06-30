@@ -1,6 +1,4 @@
-/*
-*/
-
+/* SPDX-License-Identifier: GPL-2.0-only */
 #include <linux/pci.h>
 #include <linux/kernel.h>
 #include <media/videobuf2-core.h>

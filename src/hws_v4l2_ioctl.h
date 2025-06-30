@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 #ifndef HWS_V4L2_IOCTL_H
 #define HWS_V4L2_IOCTL_H 
 

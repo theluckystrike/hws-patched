@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 #ifndef HWS_INIT_H
 #define HWS_INIT_H
 

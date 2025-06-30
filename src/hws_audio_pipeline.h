@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 #ifndef HWS_AUDIO_PIPELINE_H
 #define HWS_AUDIO_PIPELINE_H
 

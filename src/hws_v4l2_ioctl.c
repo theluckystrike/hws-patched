@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 #include "hws.h"
 #include "hws_reg.h"
 #include "hws_v4l2_tables.h"

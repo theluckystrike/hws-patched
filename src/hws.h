@@ -1,7 +1,4 @@
-/*
-
-*/
-
+/* SPDX-License-Identifier: GPL-2.0-only */
 #ifndef _HWS_PCIE_H_
 #define _HWS_PCIE_H_
 

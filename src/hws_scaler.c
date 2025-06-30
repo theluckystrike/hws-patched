@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 #include "hws_scaler.h"
 
 void SetNoVideoMem(uint8_t *pDest, int w, int h)
