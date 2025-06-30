@@ -282,7 +282,7 @@ int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 err_mem_alloc:
 
 	gdev->m_bBufferAllocate = TRUE;
-	DmaMemFreePool(gdev);
+	dma_mem_free_pool(gdev);
 	gdev->m_bBufferAllocate = FALSE;
 err_ctrl:
 	while (--i >= 0)

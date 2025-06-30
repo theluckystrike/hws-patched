@@ -220,6 +220,6 @@ void StopDevice(struct hws_pcie_dev *pdx)
 		}
 	}
 	//if(device_lost) return;
-	DmaMemFreePool(pdx);
+	dma_mem_free_pool(pdx);
 	//printk("StopDevice Done\n");
 }
