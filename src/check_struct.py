@@ -17,7 +17,7 @@ Colours:
 """
 import argparse, re, sys
 from pathlib import Path
-from pycparser import c_parser, c_ast
+from pycparser import c_parser, c_ast, plyparser
 
 # ────────────────────────────────────────────────────────────────────────────────
 # ✂️  PASTE YOUR STRUCT DEFINITION BETWEEN THE TRIPLE QUOTES  ✂️
@@ -27,8 +27,6 @@ struct hws_pcie_dev {
 	struct uio_info info;
 	struct hws_audio		audio[MAX_VID_CHANNELS];
 	struct hws_video		video[MAX_VID_CHANNELS];
-	struct work_struct		video_work;
-	struct work_struct		audio_work;
 	spinlock_t				videoslock[MAX_VID_CHANNELS];
 	spinlock_t				audiolock[MAX_VID_CHANNELS];
 	u32 *map_bar0_addr;
@@ -38,7 +36,6 @@ struct hws_pcie_dev {
  	struct tasklet_struct dpc_video_tasklet[MAX_VID_CHANNELS];
  	unsigned long audio_data[MAX_VID_CHANNELS];
  	struct tasklet_struct dpc_audio_tasklet[MAX_VID_CHANNELS];
-	int irq_count;	/* interrupt counter */	
 	int irq_line;		/* flag if irq allocated successfully */	
 	int msi_enabled;	/* flag if msi was enabled for the device */	
 	int msix_enabled;	/* flag if msi-x was enabled for the device */	
@@ -49,8 +46,6 @@ struct hws_pcie_dev {
 	u32 dwVendorID;
 	u32 m_Device_Version;
 	int  m_DeviceHW_Version;
-	u32 m_AddreeSpace;
-	u32 n_VideoModle;
 	u32  m_Device_SupportYV12;
 	u32 m_Device_SubVersion;
 	u32 m_Device_PortID;
@@ -61,7 +56,6 @@ struct hws_pcie_dev {
 	uint8_t m_bStartRun;	// Use for start run for check i2c
 	dma_addr_t   		m_pbyVideo_phys[MAX_VID_CHANNELS] ;
     uint8_t		*m_pbyVideoBuffer[MAX_VID_CHANNELS];
-	uint8_t     *m_pbyVideoBuffer_area[MAX_VID_CHANNELS];
 	u32		    m_dwVideoBuffer[MAX_VID_CHANNELS];
 	u32		    m_dwVideoHighBuffer[MAX_VID_CHANNELS];
 	VCAP_STATUS_INFO    m_pVCAPStatus[MAX_VID_CHANNELS][MAX_VIDEO_QUEUE];
@@ -76,9 +70,7 @@ struct hws_pcie_dev {
 	int m_curr_No_Video[MAX_VID_CHANNELS];
 	dma_addr_t   		m_pbyAudio_phys[MAX_VID_CHANNELS] ;
 	uint8_t     *m_pbyAudioBuffer[MAX_VID_CHANNELS];
-	uint8_t		*m_pbyUserAudioBuffer[MAX_VID_CHANNELS];
 	uint8_t     *m_pAudioData[MAX_VID_CHANNELS];
-	uint8_t     *m_pbyAudioBuffer_area[MAX_VID_CHANNELS];
 	uint8_t     *m_pAudioData_area[MAX_VID_CHANNELS];
 	uint8_t		m_bBufferAllocate;
 	u32		m_dwAudioBuffer[MAX_VID_CHANNELS];
@@ -90,7 +82,6 @@ struct hws_pcie_dev {
 	int       m_nRDVideoIndex[MAX_VID_CHANNELS];
 	int        m_nVideoBufferIndex[MAX_VID_CHANNELS];
 	int       m_nVideoHalfDone[MAX_VID_CHANNELS];
-	uint8_t	  m_dwAudioField[MAX_VID_CHANNELS];
 	uint8_t   m_nAudioBusy[MAX_VID_CHANNELS];
 	uint8_t   m_nAudioBufferIndex[MAX_VID_CHANNELS];
 	uint8_t	  m_pAudioEvent[MAX_VID_CHANNELS];
@@ -113,22 +104,71 @@ struct hws_pcie_dev {
 
 # ANSI colours
 GREEN, YELLOW, RED, RESET = "\033[92m", "\033[93m", "\033[91m", "\033[0m"
+def _fallback_regex_members(src: str, struct_name: str | None) -> list[str]:
+    """
+    Very forgiving extractor: walks braces, strips comments, grabs the last
+    token of each declarator.   Works even if unknown types/macros exist.
+    """
+    lines = src.splitlines()
+    # 1. locate struct header
+    hdr_pat = rf"\s*struct\s+{re.escape(struct_name)}\b" if struct_name \
+              else r"\s*struct\s+\w+\b"
+    start = next((i for i, L in enumerate(lines) if re.match(hdr_pat, L)), -1)
+    if start == -1:
+        return []
 
+    body, depth = [], 0
+    for L in lines[start:]:
+        depth += L.count("{") - L.count("}")
+        body.append(L)
+        if depth == 0 and "}" in L:
+            break
+
+    members: list[str] = []
+    for raw in body:
+        L = re.sub(r"/\*.*?\*/", "", raw).split("//")[0].strip()
+        if not L or L in "{}":
+            continue
+        for stmt in L.split(";"):
+            stmt = stmt.strip()
+            if not stmt:
+                continue
+            for decl in stmt.split(","):
+                decl = re.sub(r"\[[^\]]*\]", "", decl)   # drop [dims]
+                decl = decl.replace("*", " ")
+                tokens = [t for t in decl.split() if t]
+                if tokens:
+                    name = tokens[-1]
+                    if re.match(r"^[A-Za-z_]\w*$", name):
+                        members.append(name)
+    return members
 # ──────────────────────────  parsing helpers  ──────────────────────────────────
-def extract_members(src: str, struct_name: str) -> list[str]:
-    parser = c_parser.CParser()
-    ast = parser.parse(src)
+def extract_members(src: str, struct_name: str | None) -> list[str]:
+    """
+    Preferred: use pycparser for an exact AST walk.
+    Fallback:  heuristic regex if pycparser can’t parse the input.
+    """
+    try:
+        parser = c_parser.CParser()
+        ast = parser.parse(src)
 
-    class Grabber(c_ast.NodeVisitor):
-        def __init__(self):
-            self.members = []
-        def visit_Struct(self, node):
-            if node.name == struct_name and node.decls:
-                self.members += [d.name for d in node.decls]
+        class Grabber(c_ast.NodeVisitor):
+            def __init__(self):
+                self.members = []
+            def visit_Struct(self, node):
+                want = struct_name or node.name  # first struct if None
+                if node.name == want and node.decls:
+                    self.members += [d.name for d in node.decls]
 
-    g = Grabber()
-    g.visit(ast)
-    return g.members
+        g = Grabber()
+        g.visit(ast)
+        if g.members:                         # success
+            return g.members
+    except plyparser.ParseError:
+        pass                                  # fall back below
+
+    # fallback path
+    return _fallback_regex_members(src, struct_name)
 
 # ────────────────────────────  code scan  ──────────────────────────────────────
 def scan_usage(root: Path, members: list[str]) -> dict[str, dict[str, int]]:

@@ -258,8 +258,6 @@ struct hws_pcie_dev {
 	struct uio_info info;
 	struct hws_audio		audio[MAX_VID_CHANNELS];
 	struct hws_video		video[MAX_VID_CHANNELS];
-	struct work_struct		video_work;
-	struct work_struct		audio_work;
 	spinlock_t				videoslock[MAX_VID_CHANNELS];
 	spinlock_t				audiolock[MAX_VID_CHANNELS];
 	//----------------------------
@@ -272,7 +270,6 @@ struct hws_pcie_dev {
  	struct tasklet_struct dpc_audio_tasklet[MAX_VID_CHANNELS];
 	//-----------------------------
 	//spinlock_t lock; /* guards command register accesses */
-	int irq_count;	/* interrupt counter */	
 	int irq_line;		/* flag if irq allocated successfully */	
 	int msi_enabled;	/* flag if msi was enabled for the device */	
 	int msix_enabled;	/* flag if msi-x was enabled for the device */	
@@ -284,8 +281,6 @@ struct hws_pcie_dev {
 	u32 dwVendorID;
 	u32 m_Device_Version;
 	int  m_DeviceHW_Version;
-	u32 m_AddreeSpace;
-	u32 n_VideoModle;
 	u32  m_Device_SupportYV12;
 	u32 m_Device_SubVersion;
 	u32 m_Device_PortID;
@@ -298,12 +293,12 @@ struct hws_pcie_dev {
 	//------------------
 	dma_addr_t   		m_pbyVideo_phys[MAX_VID_CHANNELS] ;
     uint8_t		*m_pbyVideoBuffer[MAX_VID_CHANNELS];
-	uint8_t     *m_pbyVideoBuffer_area[MAX_VID_CHANNELS];
+
 	u32		    m_dwVideoBuffer[MAX_VID_CHANNELS];
 	u32		    m_dwVideoHighBuffer[MAX_VID_CHANNELS];
 	//uint8_t     *m_pVideoData[MAX_VID_CHANNELS][MAX_VIDEO_QUEUE];
 	//uint8_t     *m_pVideoData_area[MAX_VID_CHANNELS][MAX_VIDEO_QUEUE];
-	VCAP_STATUS_INFO    m_pVCAPStatus[MAX_VID_CHANNELS][MAX_VIDEO_QUEUE];
+	struct vcap_status m_pVCAPStatus[MAX_VID_CHANNELS][MAX_VIDEO_QUEUE];
 
 
 	struct acap_video_info video_info[MAX_VID_CHANNELS];
@@ -317,9 +312,7 @@ struct hws_pcie_dev {
 	//------------------
 	dma_addr_t   		m_pbyAudio_phys[MAX_VID_CHANNELS] ;
 	uint8_t     *m_pbyAudioBuffer[MAX_VID_CHANNELS];
-	uint8_t		*m_pbyUserAudioBuffer[MAX_VID_CHANNELS];
 	uint8_t     *m_pAudioData[MAX_VID_CHANNELS];
-	uint8_t     *m_pbyAudioBuffer_area[MAX_VID_CHANNELS];
 	uint8_t     *m_pAudioData_area[MAX_VID_CHANNELS];
 	uint8_t		m_bBufferAllocate;
 	u32		m_dwAudioBuffer[MAX_VID_CHANNELS];
@@ -332,7 +325,6 @@ struct hws_pcie_dev {
 	int       m_nRDVideoIndex[MAX_VID_CHANNELS];
 	int        m_nVideoBufferIndex[MAX_VID_CHANNELS];
 	int       m_nVideoHalfDone[MAX_VID_CHANNELS];
-	uint8_t	  m_dwAudioField[MAX_VID_CHANNELS];
 	uint8_t   m_nAudioBusy[MAX_VID_CHANNELS];
 	uint8_t   m_nAudioBufferIndex[MAX_VID_CHANNELS];
 	uint8_t	  m_pAudioEvent[MAX_VID_CHANNELS];
