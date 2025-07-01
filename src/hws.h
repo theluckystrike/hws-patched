@@ -2,71 +2,20 @@
 #ifndef _HWS_PCIE_H_
 #define _HWS_PCIE_H_
 
-#include <linux/module.h>
-#include <linux/delay.h>
+#include <linux/types.h>
+#include <linux/bitops.h>
+#include <linux/dma-mapping.h>
+#include <linux/kthread.h>
+#include <linux/pci.h>
+#include <linux/spinlock.h>
+#include <linux/workqueue.h>
 
-#include <media/v4l2-ioctl.h>
-#include <media/v4l2-event.h>
-#include <media/v4l2-common.h>
-#include <media/v4l2-device.h>
 #include <media/v4l2-ctrls.h>
-#include <media/videobuf2-v4l2.h>
+#include <media/v4l2-device.h>
 #include <media/videobuf2-dma-sg.h>
-#include <linux/uio_driver.h>
 
 #include <sound/core.h>
-#include <sound/control.h>
 #include <sound/pcm.h>
-#include <sound/opl3.h>
-
-#include <linux/bitops.h>
-#include <linux/kernel.h>
-#include <linux/timer.h>
-#include <linux/jiffies.h>
-#include <linux/sched.h>
-#include <linux/timer.h>
-#include <linux/kthread.h>
-#include <linux/cdev.h>
-#include <linux/device.h>
-#include <linux/module.h>
-#include <linux/pci.h>
-#include <linux/slab.h>
-#include <linux/uio_driver.h>
-#include <linux/spinlock.h>
-#include <linux/uio_driver.h>
-#include <linux/platform_device.h>
-#include <asm/io.h>
-#include <linux/delay.h>
-#include <linux/uaccess.h>
-#include <linux/types.h>
-#include <linux/module.h>
-#include <linux/cdev.h>
-#include <linux/dma-mapping.h>
-#include <linux/delay.h>
-#include <linux/fb.h>
-#include <linux/fs.h>
-#include <linux/init.h>
-#include <linux/interrupt.h>
-#include <linux/io.h>
-#include <linux/jiffies.h>
-#include <linux/kernel.h>
-#include <linux/mm.h>
-#include <linux/mm_types.h>
-#include <linux/poll.h>
-#include <linux/sched.h>
-#include <linux/slab.h>
-#include <linux/vmalloc.h>
-#include <linux/workqueue.h>
-#include <linux/aio.h>
-#include <linux/splice.h>
-#include <linux/version.h>
-#include <linux/uio.h>
-#include <linux/ioctl.h>
-#include <linux/delay.h>
-#include <linux/semaphore.h>   
-#include <linux/sched.h>    
-#include <linux/wait.h>   
-
 
 //---------------------------------------------
 #define MAX_USER_IRQ 1
@@ -104,23 +53,8 @@
 
 #define MAX_DMA_AUDIO_PK_SIZE      128*16*2
 
-#ifndef TRUE
-#define TRUE 1
-#define FALSE 0
-#endif 
 #define MEM_LOCK					1
 #define MEM_UNLOCK					0
-
-
-typedef unsigned int DWORD;
-//typedef int LONG;
-typedef unsigned int ULONG;
-typedef unsigned char BYTE;
-typedef unsigned char BOOL;
-
-
-
-
 
 
 #define PAGESIZE					4096
@@ -151,88 +85,52 @@ typedef unsigned char BOOL;
 #define MAX_VIDEO_HW_H 1080
 #define MAX_VIDEO_SCLAER_SIZE 1920*1080*2
 
-struct TMemParam
+struct hwsmem_param 
 {
-	DWORD   dwIndex;
-	DWORD   dwType;
-	DWORD   dwStatus;
+	u32 index;
+	u32 type;
+	u32 status;
 };
-typedef struct tagDATA_BUFFER_MSG
+
+struct vcap_status {
+	u32 lock;
+	u32 channel;
+	u32 size;
+	u32 field;
+	u32 path;
+	u32 width;
+	u32 height;
+	u32 fps;
+	u32 out_width;
+	u32 out_height;
+	u32 out_fps;
+	u32 interlace;
+	u32 hdcp;
+};
+
+struct acap_video_info
 {
-	DWORD dwHandle;
-	/////////////////////////
-	unsigned char m_bVideo;
-	int    nSubNum;
-	unsigned char   nEvenOrOdd;  // 0x00 even  0x01 odd
-	unsigned int    nWidth;
-	unsigned int    nHeight;
-	unsigned int    nPatch;
-	unsigned int     nSize;
-	unsigned char   *pDataBuffer;
-	unsigned char * pBuffer;
-}DATA_BUFFER_MSG,*LPDATA_BUFFER_MSG;
+    u8                *video_buf[MAX_VIDEO_QUEUE];
+	u8                *video_area[MAX_VIDEO_QUEUE];
+	int                buf_size[4];
+	struct vcap_status status[MAX_VIDEO_QUEUE];
+	u32                index;
+	u8                *scaler_buf;
+	u8                *yuv2_buf;
+	u8                *rotate_buf;
+	u32                running;
+};
 
-typedef struct tagWRBUF
-{
-	BYTE    *pDataBuffer;
-	int     length;
-	int     Lock;
-} WRBUF, * PWRBUF;
-
-
-typedef struct TAG_ACAP_STATUS_INFO
-{
-	DWORD       dwLength;
-	DWORD		byLock;
-}ACAP_STATUS_INFO, *PACAP_STATUS_INFO;
-
-typedef struct TAG_VCAP_STATUS_INFO
-{
-	DWORD		byLock;
-	DWORD		byChannel;
-	DWORD		bySize;
-	DWORD		byField;
-	DWORD		byPath;
-	DWORD       dwWidth; 
-	DWORD       dwHeight;
-	DWORD       dwFrameRate;
-	DWORD       dwOutWidth; 
-	DWORD       dwOutHeight;
-	DWORD       dwOutFrameRate;
-	DWORD	    dwinterlace;
-	DWORD       dwhdcp;
-} VCAP_STATUS_INFO, *PVCAP_STATUS_INFO;
-
-typedef struct 
-{
-	uint8_t		*m_pVideoBufData[MAX_VIDEO_QUEUE];
-	uint8_t     *m_pVideoData_area[MAX_VIDEO_QUEUE];
-	uint8_t		*m_pVideoBufData1[MAX_VIDEO_QUEUE];
-	uint8_t     *m_pVideoData_area1[MAX_VIDEO_QUEUE];
-	uint8_t		*m_pVideoBufData2[MAX_VIDEO_QUEUE];
-	uint8_t     *m_pVideoData_area2[MAX_VIDEO_QUEUE];
-	uint8_t		*m_pVideoBufData3[MAX_VIDEO_QUEUE];
-	uint8_t     *m_pVideoData_area3[MAX_VIDEO_QUEUE];
-	int         m_VideoBufferSize[4];
-	VCAP_STATUS_INFO pStatusInfo[MAX_VIDEO_QUEUE];
-	DWORD        m_nVideoIndex;
-	BYTE		*m_pVideoScalerBuf;
-	BYTE        *m_pVideoYUV2Buf;
-	BYTE        *m_pRotateVideoBuf;
-	DWORD		dwisRuning;
-} ACAP_VIDEO_INFO, *PACAP_VIDEO_INFO;
-
-typedef struct 
-{
-	uint8_t		*m_pAudioBufData[MAX_AUDIO_QUEUE];
-	uint8_t     *m_pAudioData_area[MAX_AUDIO_QUEUE];
-	ACAP_STATUS_INFO pStatusInfo[MAX_AUDIO_QUEUE];
-	DWORD           m_nAudioIndex;
-	DWORD		dwisRuning;
-}ACAP_AUDIO_INFO, *PACAP_AUDIO_INFO;
-
-
-
+struct acap_audio_info {
+	u8                 *audio_buf[MAX_AUDIO_QUEUE];
+	u8                 *audio_area[MAX_AUDIO_QUEUE];
+	struct {
+		u32 length;
+		u32 lock;
+	}                   status[MAX_AUDIO_QUEUE];
+	u32                index;
+	u32                running;
+};
 
 typedef enum 
 {
@@ -242,41 +140,33 @@ typedef enum
    StandardSECAM			= 0x00000004,
 } VideoStandard_t;  
 
-typedef struct tagRECT
-{
-    int    left;
-    int    top;
-    int    right;
-    int    bottom;
-} RECT, *PRECT;
-
-
-typedef struct tagVIDEO_INFO
-{
-   	DWORD	nChannel;		//0~3
-	DWORD	nStandard;		// 0: NTSC, 1:PAL
-	DWORD	bOddOnly;		// TRUE : Odd, Even - FALSE : odd
-	DWORD	dwWidth;		// Image Width
-	DWORD	dwHeight;		// Image Height
-	DWORD	nFrame1;		// NTSC : 1~30, PAL : 101~125(1~25)
-	DWORD	HLAF_SIZE;		 
-	DWORD	DWON_SIZE;		
-}VIDEO_INFO,*PVIDEO_INFO;
-
-
-#define DVRS_HW_IOC_MAGIC	'd'
-enum DVRS_HW_TYPES {
-	IOCTL_DVRS_MAP_DATA_BUFFER,
-	IOCTL_DVRS_MAP_START_DMA,
-	IOCTL_DVRS_MAP_STOP_DMA,
-	IOCTL_DVRS_MAP_GET_CAPTURE,
-	IOCTL_DVRS_MAP_SET_FORMATE
+struct hws_video_fmt {
+	u32 channel;     /* 0-3 */
+	u32 standard;    /* NTSC / PAL / … */
+	u32 odd_only;    /* 1 = odd-fields only */
+	u32 width;
+	u32 height;
+	u32 frame;       /* NTSC : 1~30, PAL : 101~125(1~25) */
+	u32 half_size;
+	u32 down_size;
 };
-#define DVRS_HW_IOCDATABUFFER		_IOWR(DVRS_HW_IOC_MAGIC, IOCTL_DVRS_MAP_DATA_BUFFER, struct TMemParam)
-#define DVRS_HW_IOCSTART_DMA	_IOWR(DVRS_HW_IOC_MAGIC, IOCTL_DVRS_MAP_START_DMA,		 struct TMemParam)
-#define DVRS_HW_IOCSTOP_DMA	   _IOWR(DVRS_HW_IOC_MAGIC, IOCTL_DVRS_MAP_STOP_DMA,		 struct TMemParam)
-#define DVRS_HW_IOCGET_CAPUTURE  _IOWR(DVRS_HW_IOC_MAGIC, IOCTL_DVRS_MAP_GET_CAPTURE,	 struct TMemParam)
-#define DVRS_HW_IOCSET_FORMATE  _IOWR(DVRS_HW_IOC_MAGIC, IOCTL_DVRS_MAP_SET_FORMATE,	 struct TMemParam)
+
+
+#define HWS_IOC_MAGIC      'd'
+
+enum hws_ioc_cmd {
+	HWS_IOC_MAP_BUFFER,
+	HWS_IOC_START_DMA,
+	HWS_IOC_STOP_DMA,
+	HWS_IOC_GET_CAPTURE,
+	HWS_IOC_SET_FORMAT,
+};
+
+#define HWS_IOC_MAP_BUFFER     _IOWR(HWS_IOC_MAGIC, HWS_IOC_MAP_BUFFER,  struct hwsmem_param)
+#define HWS_IOC_START_DMA      _IOWR(HWS_IOC_MAGIC, HWS_IOC_START_DMA,   struct hwsmem_param)
+#define HWS_IOC_STOP_DMA       _IOWR(HWS_IOC_MAGIC, HWS_IOC_STOP_DMA,    struct hwsmem_param)
+#define HWS_IOC_GET_CAPTURE    _IOWR(HWS_IOC_MAGIC, HWS_IOC_GET_CAPTURE, struct hwsmem_param)
+#define HWS_IOC_SET_FORMAT     _IOWR(HWS_IOC_MAGIC, HWS_IOC_SET_FORMAT,  struct hwsmem_param)
 
 //--------------------
 
@@ -300,7 +190,7 @@ struct hwsvideo_buffer {
 };
 
 struct hws_dmabuf{
-	unsigned int			size;
+	u32                 size;
 	__le32					*cpu;
 	dma_addr_t				dma;	
 };
@@ -414,11 +304,12 @@ struct hws_pcie_dev {
 	//uint8_t     *m_pVideoData[MAX_VID_CHANNELS][MAX_VIDEO_QUEUE];
 	//uint8_t     *m_pVideoData_area[MAX_VID_CHANNELS][MAX_VIDEO_QUEUE];
 	VCAP_STATUS_INFO    m_pVCAPStatus[MAX_VID_CHANNELS][MAX_VIDEO_QUEUE];
-	ACAP_VIDEO_INFO m_VideoInfo[MAX_VID_CHANNELS];
 
-	VIDEO_INFO      	m_format[MAX_VID_CHANNELS];
-	
-	ACAP_AUDIO_INFO     m_AudioInfo[MAX_VID_CHANNELS];
+
+	struct acap_video_info video_info[MAX_VID_CHANNELS];
+	struct hws_video_fmt format[MAX_VID_CHANNELS];
+	struct acap_audio_info audio_info[MAX_VID_CHANNELS];
+
 	uint8_t				m_bChangeVideoSize[MAX_VID_CHANNELS];
 	
 	struct task_struct *mMain_tsk; 

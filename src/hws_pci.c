@@ -205,11 +205,11 @@ int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 		gdev->m_pVCAPStatus[i][j].dwOutHeight = 1080;
 		//gdev->m_pVideoData[i][j] = NULL;
 		//------------------
-		gdev->m_VideoInfo[i].m_pVideoBufData[j] = NULL;
-		gdev->m_VideoInfo[i].m_pVideoBufData1[j] = NULL;
-		gdev->m_VideoInfo[i].m_pVideoBufData2[j] = NULL;
-		gdev->m_VideoInfo[i].m_pVideoBufData3[j] = NULL;
-		gdev->m_VideoInfo[i].pStatusInfo[j].byLock = MEM_UNLOCK;
+		gdev->video_info[i].video_buf[j] = NULL;
+		// gdev->video_info[i].m_pVideoBufData1[j] = NULL;
+		// gdev->video_info[i].m_pVideoBufData2[j] = NULL;
+		// gdev->video_info[i].m_pVideoBufData3[j] = NULL;
+		gdev->video_info[i].status[j].lock = MEM_UNLOCK;
 		//----------------
 		//--------audio
 		gdev->m_pAudioEvent[i] = 0;
@@ -225,13 +225,12 @@ int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 		//mutex_init(&gdev->video_mutex[i]);
 		//init_waitqueue_head(&gdev->wq_video[i]);
 		//gdev->wq_flag[i]=0;
-		gdev->m_AudioInfo[i].dwisRuning = 0;
-		gdev->m_AudioInfo[i].m_nAudioIndex = 0;
+		gdev->audio_info[i].running = 0;
+		gdev->audio_info[i].index = 0;
 		gdev->audio[i].resampled_buf = NULL;
 		for (j = 0; j < MAX_AUDIO_QUEUE; j++) {
-			gdev->m_AudioInfo[i].m_pAudioBufData[j] = NULL;
-			gdev->m_AudioInfo[i].pStatusInfo[j].byLock = MEM_UNLOCK;
-			gdev->m_AudioInfo[i].m_pAudioBufData[j] = NULL;
+			gdev->audio_info[i].audio_buf[j] = NULL;
+			gdev->audio_info[i].status[j].lock = MEM_UNLOCK;
 		}
 		//gdev->video[i].v4l2_dev = NULL;
 	}
@@ -255,7 +254,7 @@ int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 		     (unsigned long)gdev);
 
 	//----------------------
-	ret = DmaMemAllocPool(gdev);
+	ret = dma_mem_alloc_pool(gdev);
 	if (ret != 0) {
 		goto err_mem_alloc;
 	}
