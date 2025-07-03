@@ -34,83 +34,41 @@ static void enable_pcie_relaxed_ordering(struct pci_dev *dev)
 	pcie_capability_set_word(dev, PCI_EXP_DEVCTL, PCI_EXP_DEVCTL_RELAX_EN);
 }
 
-int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
+static int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 {
 	struct hws_pcie_dev *gdev = NULL;
 	int err = 0, ret = -ENODEV;
-	//u8 val=0;
-	//u32 m_dev_ver=0;
-	//u32 m_dev_vid_ver=0;
-	//u32 m_dev_supportYV12=0;
-	//u32 m_Device_Version=0;
-	//ULONG m_tmpHWKey;
-	//ULONG m_tmpVersion;
-	//u32 m_tmpVersion=0;
-	//u32 m_Device_SubVersion=0;
-	//u32 m_Device_SupportYV12=0;
-	//ULONG n_VideoModle =0;
-	//u64 *mem64_ptr;
 	int j, i;
-	//---------------------------
-	//printk("hws_probe  probe\n");
-	//------------------------
-	gdev = alloc_dev_instance(pdev);
-	//sys_dvrs_hw_pdx = gdev;
+
+	gdev = hws_alloc_dev_instance(pdev);
 	gdev->pdev = pdev;
 
 	gdev->dwDeviceID = gdev->pdev->device;
 	gdev->dwVendorID = gdev->pdev->vendor;
-	printk("MV360: Device =%X VID =%X\n", gdev->dwDeviceID,
-	       gdev->dwVendorID);
+	dev_info(&pdev->dev, "Device VID=0x%04x, DID=0x%04x\n",
+		 pdev->vendor, pdev->device);
+
 	err = pci_enable_device(pdev);
 	if (err) {
 		dev_err(&pdev->dev, "%s: pci_enable_device failed: %d\n",
 			__func__, err);
 		goto err_alloc;
 	}
-//printk("hws_probe  probe 2\n");
-#if 0
-	if (pci_request_regions(pdev, "longtimetech"))
-		goto err_disable;
-	if (pci_set_dma_mask(pdev, DMA_BIT_MASK(32))) {
-		printk(KERN_EMERG "fail pci_set_dma_mask\n");
-       	goto err_release;
-    }
-#endif
 
-	//printk("hws_probe  probe 3\n");
 	enable_pcie_relaxed_ordering(pdev);
-	//printk("hws_probe  probe 4\n");
 	pci_set_master(pdev);
-	//------------------------------------
 	ret = probe_scan_for_msi(gdev, pdev);
+
 	if (ret < 0)
 		goto disable_msi;
-	//------------------------
-	//printk("hws_probe  probe 5\n");
-	/* known root complex's max read request sizes */
+
 #ifdef CONFIG_ARCH_TI816X
-	//dbg_init("TI816X RC detected: limit MaxReadReq size to 128 bytes.\n");
 	pcie_set_readrq(pdev, 128);
 #endif
-#if 0
-	gdev->info.mem[0].addr = pci_resource_start(pdev, 0);
-	if (!gdev->info.mem[0].addr)
-		goto err_release;
-#endif
-//printk("hws_probe  ioremap_nocache\n");
-#if 0
-	gdev->info.mem[0].internal_addr = ioremap_nocache(pci_resource_start(pdev, 0), 
-		pci_resource_len(pdev, 0));
-#else
-	//gdev->info.mem[0].internal_addr = ioremap_cache(pci_resource_start(pdev, 0),
-	//gdev->info.mem[0].internal_addr = ioremap_nocache(pci_resource_start(pdev, 0),
-	//pci_resource_len(pdev, 0));
 
 	gdev->info.mem[0].internal_addr =
 		ioremap(pci_resource_start(pdev, 0), pci_resource_len(pdev, 0));
 
-#endif
 	gdev->wq = NULL;
 	gdev->auwq = NULL;
 	gdev->map_bar0_addr = (u32 *)gdev->info.mem[0].internal_addr;
@@ -121,18 +79,13 @@ int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 	gdev->info.mem[0].size = pci_resource_len(pdev, 0);
 	gdev->info.mem[0].memtype = UIO_MEM_PHYS;
 
-	//printk(" pdev->irq = %d \n",pdev->irq);
 	ret = hws_irq_setup(gdev, pdev);
 	if (ret)
 		goto err_register;
 
-	//printk("pci_set_drvdata \n");
 	pci_set_drvdata(pdev, gdev);
-	//enable irq
-	//enable_irq(gdev->info.irq);
-	//------
 	ReadChipId(gdev);
-	//---------------
+
 	for (i = 0; i < MAX_VID_CHANNELS; i++) {
 		struct hws_video *vid = &gdev->video[i];
 		struct v4l2_ctrl_handler *hdl = &vid->ctrl_handler;
@@ -168,7 +121,6 @@ int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 				i, ret);
 			goto err_ctrl;
 		}
-	}
 	//gdev->m_nVideoIndex[i] =0;
 	gdev->m_nRDVideoIndex[i] = 0;
 	gdev->m_bVCapIntDone[i] = 0;
@@ -234,6 +186,7 @@ int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 		}
 		//gdev->video[i].v4l2_dev = NULL;
 	}
+	}
 	//---------------------
 	tasklet_init(&gdev->dpc_video_tasklet[0], DpcForIsr_Video0,
 		     (unsigned long)gdev);
@@ -258,25 +211,19 @@ int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 	if (ret != 0) {
 		goto err_mem_alloc;
 	}
-	//SetDMAAddress(gdev);
+
 	InitVideoSys(gdev, 0);
 	StartKSThread(gdev);
-	// just test
-	//StartVideoCapture(gdev,0);
-	//-------------------
-	//printk("hws_probe probe exit \n");
-	//--------------------------------------
-	//--------------------
+
 	hws_adapters_init(gdev);
 	gdev->wq = create_singlethread_workqueue("hws");
 	gdev->auwq = create_singlethread_workqueue("hws-audio");
-	//----------------
+
 	if (hws_video_register(gdev))
 		goto err_mem_alloc;
-#if 1
+
 	if (hws_audio_register(gdev))
 		goto err_mem_alloc;
-#endif
 	return 0;
 err_mem_alloc:
 
@@ -298,13 +245,10 @@ disable_msi:
 		gdev->msi_enabled = 0;
 	}
 err_release:
-	kfree(gdev);
 	pci_release_regions(pdev);
 	pci_disable_device(pdev);
 	return err;
 err_alloc:
-	kfree(gdev);
-
 	return -1;
 }
 
@@ -366,48 +310,35 @@ void hws_remove(struct pci_dev *pdev)
 		pci_disable_msi(pdev);
 		dev->msi_enabled = 0;
 	}
+	// FIXME: is this no longer needed because we're using device managed memory?
 	kfree(dev);
 	pci_disable_device(pdev);
 	pci_set_drvdata(pdev, NULL);
 	//printk("hws_remove  Done\n");
 }
 
-struct hws_pcie_dev *alloc_dev_instance(struct pci_dev *pdev)
+static struct hws_pcie_dev *hws_alloc_dev_instance(struct pci_dev *pdev)
 {
-	//int i;
-	struct hws_pcie_dev *lro;
+    struct hws_pcie_dev *lro;
 
-	BUG_ON(!pdev);
+    if (WARN_ON(!pdev))
+        return ERR_PTR(-EINVAL);
 
-	/* allocate zeroed device book keeping structure */
-	lro = kzalloc(sizeof(struct hws_pcie_dev), GFP_KERNEL);
-	if (!lro) {
-		printk("Could not kzalloc(hws_pcie_dev).\n");
-		return NULL;
-	}
+    lro = devm_kzalloc(&pdev->dev, sizeof(*lro), GFP_KERNEL);
+    if (!lro) {
+        dev_err(&pdev->dev, "failed to alloc hws_pcie_dev\n");
+        return ERR_PTR(-ENOMEM);
+    }
 
-	//lro->magic = MAGIC_DEVICE;
-	//lro->config_bar_idx = -1;
-	//lro->user_bar_idx = -1;
-	//lro->bypass_bar_idx = -1;
-	lro->irq_line = -1;
+    /* no IRQ yet */
+    lro->irq_line = -1;
 
-	/* create a device to driver reference */
-	dev_set_drvdata(&pdev->dev, lro);
-	/* create a driver to device reference */
-	lro->pdev = pdev;
-	//printk("probe() lro = 0x%p\n", lro);
+    dev_set_drvdata(&pdev->dev, lro);
+    lro->pdev = pdev;
 
-	/* Set up data user IRQ data structures */
-	//for (i = 0; i < MAX_USER_IRQ; i++) {
-	//	lro->user_irq[i].lro = lro;
-	//	spin_lock_init(&lro->user_irq[i].events_lock);
-	//	init_waitqueue_head(&lro->user_irq[i].events_wq);
-	//}
 
-	return lro;
+    return lro;
 }
-
 //--------------------------------------
 
 /* type = PCI_CAP_ID_MSI or PCI_CAP_ID_MSIX */

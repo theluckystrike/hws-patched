@@ -15,9 +15,7 @@
 	.driver_data	= (unsigned long) (__configptr)			\
 }
 
-int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id);
 void hws_remove(struct pci_dev *pdev);
-struct hws_pcie_dev *alloc_dev_instance(struct pci_dev *pdev);
 // int msi_msix_capable(struct pci_dev *dev, int type);
 // int probe_scan_for_msi(struct hws_pcie_dev *lro, struct pci_dev *pdev);
 void WRITE_REGISTER_ULONG(struct hws_pcie_dev *pdx, u32 RegisterOffset,
