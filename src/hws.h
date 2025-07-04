@@ -304,7 +304,6 @@ entry	msix_entries
 struct hws_pcie_dev {
 	/* ───── core objects ───── */
 	struct pci_dev			*pdev;
-	struct uio_info uio;
 	struct hws_audio		audio[MAX_VID_CHANNELS];
 	struct hws_video		video[MAX_VID_CHANNELS];
 

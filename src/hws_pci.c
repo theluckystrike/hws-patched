@@ -34,6 +34,64 @@ static void enable_pcie_relaxed_ordering(struct pci_dev *dev)
 	pcie_capability_set_word(dev, PCI_EXP_DEVCTL, PCI_EXP_DEVCTL_RELAX_EN);
 }
 
+static int read_chip_id(struct hws_pcie_dev *pdx)
+{
+	//  CCIR_PACKET      reg;
+	//int Chip_id1 = 0;
+	int ret = 0;
+	//int reg_vaule = 0;
+	//int nResult;
+	int i;
+	//------read Dvice Version
+	ULONG m_dev_ver;
+	ULONG m_tmpVersion;
+	ULONG m_tmpHWKey;
+	//ULONG m_OEM_code_data;
+	m_dev_ver = READ_REGISTER_ULONG(pdx, HWS_REG_DEVICE_INFO);
+
+	/* Bits 7:0   = device version */
+	m_tmpVersion = m_dev_ver >> 8;
+	pdx->m_Device_Version = (m_tmpVersion & 0xFF);
+
+	/* Bits 15:8  = device subversion */
+	m_tmpVersion = m_dev_ver >> 16;
+	pdx->m_Device_SubVersion = (m_tmpVersion & 0xFF);
+
+	/* Bits 31:28 = YV12 support flags (4 bits) */
+	pdx->m_Device_SupportYV12 = ((m_dev_ver >> 28) & 0x0F);
+
+	/* Bits 27:24 = HW key; low two bits of that = port ID */
+	m_tmpHWKey = (m_dev_ver >> 24) & 0x0F;
+	pdx->m_Device_PortID = (m_tmpHWKey & 0x03);
+
+	//n_VideoModle =	READ_REGISTER_ULONG(pdx,0x4000+(4*PCIE_BARADDROFSIZE));
+	//n_VideoModle = (n_VideoModle>>8)&0xFF;
+	//pdx->m_IsHDModel = 1;
+	pdx->m_MaxHWVideoBufferSize = MAX_MM_VIDEO_SIZE;
+	pdx->m_nMaxChl = 4;
+	pdx->m_bBufferAllocate = FALSE;
+	pdx->mMain_tsk = NULL;
+	pdx->m_dwAudioPTKSize = MAX_DMA_AUDIO_PK_SIZE; //128*16*4;
+	pdx->m_bStartRun = 0;
+	pdx->m_PciDeviceLost = 0;
+
+	//--------
+	for (i = 0; i < MAX_VID_CHANNELS; i++) {
+		SetVideoFormatSize(pdx, i, 1920, 1080);
+	}
+	//-------
+	WRITE_REGISTER_ULONG(pdx, HWS_REG_DEC_MODE, 0x0);
+	//ssleep(100);
+	WRITE_REGISTER_ULONG(pdx, HWS_REG_DEC_MODE, 0x10);
+	//ssleep(500);
+	//-------
+	SetHardWareInfo(pdx);
+	printk("************[HW]-[VIDV]=[%d]-[%d]-[%d] ************\n",
+	       pdx->m_Device_Version, pdx->m_Device_SubVersion,
+	       pdx->m_Device_PortID);
+	return ret;
+}
+
 static int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 {
 	struct hws_pcie_dev *gdev = NULL;
@@ -43,8 +101,8 @@ static int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 	gdev = hws_alloc_dev_instance(pdev);
 	gdev->pdev = pdev;
 
-	gdev->dwDeviceID = gdev->pdev->device;
-	gdev->dwVendorID = gdev->pdev->vendor;
+	gdev->device_id = gdev->pdev->device;
+	gdev->vendor_id = gdev->pdev->vendor;
 	dev_info(&pdev->dev, "Device VID=0x%04x, DID=0x%04x\n",
 		 pdev->vendor, pdev->device);
 
@@ -54,6 +112,22 @@ static int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 			__func__, err);
 		goto err_alloc;
 	}
+
+    err = pci_request_regions(pdev, DRV_NAME);
+    if (err) {
+        dev_err(&pdev->dev, "pci_request_regions failed: %d\n", err);
+        goto disable_device;
+    }
+
+    /* map BAR0 via the PCI core: */
+    gdev->bar0_base = pci_iomap(pdev, 0,
+                                pci_resource_len(pdev, 0));
+    if (!gdev->bar0_base) {
+        dev_err(&pdev->dev, "pci_iomap failed\n");
+        err = -ENOMEM;
+        goto release_regions;
+    }
+
 
 	enable_pcie_relaxed_ordering(pdev);
 	pci_set_master(pdev);
@@ -66,25 +140,15 @@ static int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 	pcie_set_readrq(pdev, 128);
 #endif
 
-	gdev->info.mem[0].internal_addr =
-		ioremap(pci_resource_start(pdev, 0), pci_resource_len(pdev, 0));
-
-	gdev->wq = NULL;
-	gdev->auwq = NULL;
-	gdev->map_bar0_addr = (u32 *)gdev->info.mem[0].internal_addr;
-
-	if (!gdev->info.mem[0].internal_addr)
-		goto err_release;
-
-	gdev->info.mem[0].size = pci_resource_len(pdev, 0);
-	gdev->info.mem[0].memtype = UIO_MEM_PHYS;
+	gdev->video_wq = NULL;
+	gdev->audio_w = NULL;
 
 	ret = hws_irq_setup(gdev, pdev);
 	if (ret)
 		goto err_register;
 
 	pci_set_drvdata(pdev, gdev);
-	ReadChipId(gdev);
+	read_chip_id(gdev);
 
 	for (i = 0; i < MAX_VID_CHANNELS; i++) {
 		struct hws_video *vid = &gdev->video[i];
@@ -244,6 +308,10 @@ disable_msi:
 		pci_disable_msi(pdev);
 		gdev->msi_enabled = 0;
 	}
+release_regions:
+    pci_release_regions(pdev);
+disable_device:
+    pci_disable_device(pdev);
 err_release:
 	pci_release_regions(pdev);
 	pci_disable_device(pdev);

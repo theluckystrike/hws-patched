@@ -47,64 +47,6 @@ static void StopDsp(struct hws_pcie_dev *pdx)
 
 //----------------------------------------------
 
-int ReadChipId(struct hws_pcie_dev *pdx)
-{
-	//  CCIR_PACKET      reg;
-	//int Chip_id1 = 0;
-	int ret = 0;
-	//int reg_vaule = 0;
-	//int nResult;
-	int i;
-	//------read Dvice Version
-	ULONG m_dev_ver;
-	ULONG m_tmpVersion;
-	ULONG m_tmpHWKey;
-	//ULONG m_OEM_code_data;
-	m_dev_ver = READ_REGISTER_ULONG(pdx, HWS_REG_DEVICE_INFO);
-
-	/* Bits 7:0   = device version */
-	m_tmpVersion = m_dev_ver >> 8;
-	pdx->m_Device_Version = (m_tmpVersion & 0xFF);
-
-	/* Bits 15:8  = device subversion */
-	m_tmpVersion = m_dev_ver >> 16;
-	pdx->m_Device_SubVersion = (m_tmpVersion & 0xFF);
-
-	/* Bits 31:28 = YV12 support flags (4 bits) */
-	pdx->m_Device_SupportYV12 = ((m_dev_ver >> 28) & 0x0F);
-
-	/* Bits 27:24 = HW key; low two bits of that = port ID */
-	m_tmpHWKey = (m_dev_ver >> 24) & 0x0F;
-	pdx->m_Device_PortID = (m_tmpHWKey & 0x03);
-
-	//n_VideoModle =	READ_REGISTER_ULONG(pdx,0x4000+(4*PCIE_BARADDROFSIZE));
-	//n_VideoModle = (n_VideoModle>>8)&0xFF;
-	//pdx->m_IsHDModel = 1;
-	pdx->m_MaxHWVideoBufferSize = MAX_MM_VIDEO_SIZE;
-	pdx->m_nMaxChl = 4;
-	pdx->m_bBufferAllocate = FALSE;
-	pdx->mMain_tsk = NULL;
-	pdx->m_dwAudioPTKSize = MAX_DMA_AUDIO_PK_SIZE; //128*16*4;
-	pdx->m_bStartRun = 0;
-	pdx->m_PciDeviceLost = 0;
-
-	//--------
-	for (i = 0; i < MAX_VID_CHANNELS; i++) {
-		SetVideoFormatSize(pdx, i, 1920, 1080);
-	}
-	//-------
-	WRITE_REGISTER_ULONG(pdx, HWS_REG_DEC_MODE, 0x0);
-	//ssleep(100);
-	WRITE_REGISTER_ULONG(pdx, HWS_REG_DEC_MODE, 0x10);
-	//ssleep(500);
-	//-------
-	SetHardWareInfo(pdx);
-	printk("************[HW]-[VIDV]=[%d]-[%d]-[%d] ************\n",
-	       pdx->m_Device_Version, pdx->m_Device_SubVersion,
-	       pdx->m_Device_PortID);
-	return ret;
-}
-
 void SetHardWareInfo(struct hws_pcie_dev *pdx)
 {
 	switch (pdx->dwDeviceID) {
