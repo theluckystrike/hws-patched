@@ -94,66 +94,66 @@ static int read_chip_id(struct hws_pcie_dev *pdx)
 	return ret;
 }
 
-static int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
+static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id)
 {
-	struct hws_pcie_dev *gdev = NULL;
+	struct hws_pcie_dev *hws_dev= NULL;
 	int err = 0, ret = -ENODEV;
 	int j, i;
 
-	gdev = hws_alloc_dev_instance(pdev);
-	gdev->pdev = pdev;
+	hws_dev = hws_alloc_dev_instance(pci_dev);
+	hws_dev->pdev = pci_dev;
 
-	gdev->device_id = gdev->pdev->device;
-	gdev->vendor_id = gdev->pdev->vendor;
-	dev_info(&pdev->dev, "Device VID=0x%04x, DID=0x%04x\n",
-		 pdev->vendor, pdev->device);
+	hws_dev->device_id = hws_dev->pci_dev->device;
+	hws_dev->vendor_id = hws_dev->pci_dev->vendor;
+	dev_info(&pci_dev->dev, "Device VID=0x%04x, DID=0x%04x\n",
+		 pci_dev->vendor, pci_dev->device);
 
-	err = pci_enable_device(pdev);
+	err = pci_enable_device(pci_dev);
 	if (err) {
-		dev_err(&pdev->dev, "%s: pci_enable_device failed: %d\n",
+		dev_err(&pci_dev->dev, "%s: pci_enable_device failed: %d\n",
 			__func__, err);
 		goto err_alloc;
 	}
 
-    err = pci_request_regions(pdev, DRV_NAME);
+    err = pci_request_regions(pci_dev, DRV_NAME);
     if (err) {
-        dev_err(&pdev->dev, "pci_request_regions failed: %d\n", err);
+        dev_err(&pci_dev->dev, "pci_request_regions failed: %d\n", err);
         goto disable_device;
     }
 
     /* map BAR0 via the PCI core: */
-    gdev->bar0_base = pci_iomap(pdev, 0,
-                                pci_resource_len(pdev, 0));
-    if (!gdev->bar0_base) {
-        dev_err(&pdev->dev, "pci_iomap failed\n");
+    hws_dev->bar0_base = pci_iomap(pci_dev, 0,
+                                pci_resource_len(pci_dev, 0));
+    if (!hws_dev->bar0_base) {
+        dev_err(&pci_dev->dev, "pci_iomap failed\n");
         err = -ENOMEM;
         goto release_regions;
     }
 
 
-	enable_pcie_relaxed_ordering(pdev);
-	pci_set_master(pdev);
-	ret = probe_scan_for_msi(gdev, pdev);
+	enable_pcie_relaxed_ordering(pci_dev);
+	pci_set_master(pci_dev);
+	ret = probe_scan_for_msi(hws_dev, pci_dev);
 
 	if (ret < 0)
 		goto disable_msi;
 
 #ifdef CONFIG_ARCH_TI816X
-	pcie_set_readrq(pdev, 128);
+	pcie_set_readrq(pci_dev, 128);
 #endif
 
-	gdev->video_wq = NULL;
-	gdev->audio_w = NULL;
+	hws_dev->video_wq = NULL;
+	hws_dev->audio_w = NULL;
 
-	ret = hws_irq_setup(gdev, pdev);
+	ret = hws_irq_setup(hws_dev, pci_dev);
 	if (ret)
 		goto err_register;
 
-	pci_set_drvdata(pdev, gdev);
-	read_chip_id(gdev);
+	pci_set_drvdata(pci_dev, hws_dev);
+	read_chip_id(hws_dev);
 
 	for (i = 0; i < MAX_VID_CHANNELS; i++) {
-		struct hws_video *vid = &gdev->video[i];
+		struct hws_video *vid = &hws_dev->video[i];
 		struct v4l2_ctrl_handler *hdl = &vid->ctrl_handler;
 
 		/* 1. Allocate the per-device control handler (room for 2 controls) */
@@ -182,141 +182,141 @@ static int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 		/* 5. Bail out cleanly if ctrl creation failed */
 		if (hdl->error) {
 			ret = hdl->error;
-			dev_err(&pdev->dev,
+			dev_err(&pci_dev->dev,
 				"ctrl-handler init failed on channel %d: %d\n",
 				i, ret);
 			goto err_ctrl;
 		}
-	//gdev->m_nVideoIndex[i] =0;
-	gdev->m_nRDVideoIndex[i] = 0;
-	gdev->m_bVCapIntDone[i] = 0;
-	gdev->m_nVideoBusy[i] = 0;
-	gdev->m_bChangeVideoSize[i] = 0;
-	gdev->m_nVideoBufferIndex[i] = 0;
-	gdev->m_nVideoHalfDone[i] = 0;
-	gdev->m_pVideoEvent[i] = 0;
-	SetVideoFormatSize(gdev, i, 1920, 1080);
-	gdev->m_bVCapStarted[i] = 0;
-	gdev->m_bVideoStop[i] = 0;
-	gdev->video_data[i] = 0;
+	//hws_dev->m_nVideoIndex[i] =0;
+	hws_dev->m_nRDVideoIndex[i] = 0;
+	hws_dev->m_bVCapIntDone[i] = 0;
+	hws_dev->m_nVideoBusy[i] = 0;
+	hws_dev->m_bChangeVideoSize[i] = 0;
+	hws_dev->m_nVideoBufferIndex[i] = 0;
+	hws_dev->m_nVideoHalfDone[i] = 0;
+	hws_dev->m_pVideoEvent[i] = 0;
+	SetVideoFormatSize(hws_dev, i, 1920, 1080);
+	hws_dev->m_bVCapStarted[i] = 0;
+	hws_dev->m_bVideoStop[i] = 0;
+	hws_dev->video_data[i] = 0;
 	//----------------------
-	gdev->m_contrast[i] = 0x80;
-	gdev->m_brightness[i] = 0x80;
-	gdev->m_saturation[i] = 0x80;
-	gdev->m_hue[i] = 0x80;
-	gdev->m_dwSWFrameRate[i] = 0;
-	gdev->m_pbyVideoBuffer[i] = NULL;
-	gdev->m_VideoInfo[i].dwisRuning = 0;
-	gdev->m_VideoInfo[i].m_nVideoIndex = 0;
-	gdev->m_VideoInfo[i].m_pVideoScalerBuf = NULL;
-	gdev->m_VideoInfo[i].m_pVideoYUV2Buf = NULL;
-	gdev->m_VideoInfo[i].m_pRotateVideoBuf = NULL;
+	hws_dev->m_contrast[i] = 0x80;
+	hws_dev->m_brightness[i] = 0x80;
+	hws_dev->m_saturation[i] = 0x80;
+	hws_dev->m_hue[i] = 0x80;
+	hws_dev->m_dwSWFrameRate[i] = 0;
+	hws_dev->m_pbyVideoBuffer[i] = NULL;
+	hws_dev->m_VideoInfo[i].dwisRuning = 0;
+	hws_dev->m_VideoInfo[i].m_nVideoIndex = 0;
+	hws_dev->m_VideoInfo[i].m_pVideoScalerBuf = NULL;
+	hws_dev->m_VideoInfo[i].m_pVideoYUV2Buf = NULL;
+	hws_dev->m_VideoInfo[i].m_pRotateVideoBuf = NULL;
 	for (j = 0; j < MAX_VIDEO_QUEUE; j++) {
-		gdev->m_pVCAPStatus[i][j].byLock = MEM_UNLOCK;
-		gdev->m_pVCAPStatus[i][j].byField = 0;
-		gdev->m_pVCAPStatus[i][j].byPath = 2;
-		gdev->m_pVCAPStatus[i][j].dwWidth = 1920;
-		gdev->m_pVCAPStatus[i][j].dwHeight = 1080;
-		gdev->m_pVCAPStatus[i][j].dwinterlace = 0;
-		gdev->m_pVCAPStatus[i][j].dwFrameRate = 60;
-		gdev->m_pVCAPStatus[i][j].dwOutWidth = 1920;
-		gdev->m_pVCAPStatus[i][j].dwOutHeight = 1080;
-		//gdev->m_pVideoData[i][j] = NULL;
+		hws_dev->m_pVCAPStatus[i][j].byLock = MEM_UNLOCK;
+		hws_dev->m_pVCAPStatus[i][j].byField = 0;
+		hws_dev->m_pVCAPStatus[i][j].byPath = 2;
+		hws_dev->m_pVCAPStatus[i][j].dwWidth = 1920;
+		hws_dev->m_pVCAPStatus[i][j].dwHeight = 1080;
+		hws_dev->m_pVCAPStatus[i][j].dwinterlace = 0;
+		hws_dev->m_pVCAPStatus[i][j].dwFrameRate = 60;
+		hws_dev->m_pVCAPStatus[i][j].dwOutWidth = 1920;
+		hws_dev->m_pVCAPStatus[i][j].dwOutHeight = 1080;
+		//hws_dev->m_pVideoData[i][j] = NULL;
 		//------------------
-		gdev->video_info[i].video_buf[j] = NULL;
-		// gdev->video_info[i].m_pVideoBufData1[j] = NULL;
-		// gdev->video_info[i].m_pVideoBufData2[j] = NULL;
-		// gdev->video_info[i].m_pVideoBufData3[j] = NULL;
-		gdev->video_info[i].status[j].lock = MEM_UNLOCK;
+		hws_dev->video_info[i].video_buf[j] = NULL;
+		// hws_dev->video_info[i].m_pVideoBufData1[j] = NULL;
+		// hws_dev->video_info[i].m_pVideoBufData2[j] = NULL;
+		// hws_dev->video_info[i].m_pVideoBufData3[j] = NULL;
+		hws_dev->video_info[i].status[j].lock = MEM_UNLOCK;
 		//----------------
 		//--------audio
-		gdev->m_pAudioEvent[i] = 0;
-		gdev->m_bACapStarted[i] = 0;
-		gdev->m_bAudioRun[i] = 0;
-		gdev->m_bAudioStop[i] = 0;
-		gdev->m_nAudioBusy[i] = 0;
-		gdev->m_nRDAudioIndex[i] = 0;
-		//sema_init(&gdev->sem_video[i],1);
-		//spin_lock_init(&gdev->video_lock[i]);
-		spin_lock_init(&gdev->videoslock[i]);
-		spin_lock_init(&gdev->audiolock[i]);
-		//mutex_init(&gdev->video_mutex[i]);
-		//init_waitqueue_head(&gdev->wq_video[i]);
-		//gdev->wq_flag[i]=0;
-		gdev->audio_info[i].running = 0;
-		gdev->audio_info[i].index = 0;
-		gdev->audio[i].resampled_buf = NULL;
+		hws_dev->m_pAudioEvent[i] = 0;
+		hws_dev->m_bACapStarted[i] = 0;
+		hws_dev->m_bAudioRun[i] = 0;
+		hws_dev->m_bAudioStop[i] = 0;
+		hws_dev->m_nAudioBusy[i] = 0;
+		hws_dev->m_nRDAudioIndex[i] = 0;
+		//sema_init(&hws_dev->sem_video[i],1);
+		//spin_lock_init(&hws_dev->video_lock[i]);
+		spin_lock_init(&hws_dev->videoslock[i]);
+		spin_lock_init(&hws_dev->audiolock[i]);
+		//mutex_init(&hws_dev->video_mutex[i]);
+		//init_waitqueue_head(&hws_dev->wq_video[i]);
+		//hws_dev->wq_flag[i]=0;
+		hws_dev->audio_info[i].running = 0;
+		hws_dev->audio_info[i].index = 0;
+		hws_dev->audio[i].resampled_buf = NULL;
 		for (j = 0; j < MAX_AUDIO_QUEUE; j++) {
-			gdev->audio_info[i].audio_buf[j] = NULL;
-			gdev->audio_info[i].status[j].lock = MEM_UNLOCK;
+			hws_dev->audio_info[i].audio_buf[j] = NULL;
+			hws_dev->audio_info[i].status[j].lock = MEM_UNLOCK;
 		}
-		//gdev->video[i].v4l2_dev = NULL;
+		//hws_dev->video[i].v4l2_dev = NULL;
 	}
 	}
 	//---------------------
-	tasklet_init(&gdev->dpc_video_tasklet[0], DpcForIsr_Video0,
-		     (unsigned long)gdev);
-	tasklet_init(&gdev->dpc_video_tasklet[1], DpcForIsr_Video1,
-		     (unsigned long)gdev);
-	tasklet_init(&gdev->dpc_video_tasklet[2], DpcForIsr_Video2,
-		     (unsigned long)gdev);
-	tasklet_init(&gdev->dpc_video_tasklet[3], DpcForIsr_Video3,
-		     (unsigned long)gdev);
+	tasklet_init(&hws_dev->dpc_video_tasklet[0], DpcForIsr_Video0,
+		     (unsigned long)hws_dev);
+	tasklet_init(&hws_dev->dpc_video_tasklet[1], DpcForIsr_Video1,
+		     (unsigned long)hws_dev);
+	tasklet_init(&hws_dev->dpc_video_tasklet[2], DpcForIsr_Video2,
+		     (unsigned long)hws_dev);
+	tasklet_init(&hws_dev->dpc_video_tasklet[3], DpcForIsr_Video3,
+		     (unsigned long)hws_dev);
 
-	tasklet_init(&gdev->dpc_audio_tasklet[0], DpcForIsr_Audio0,
-		     (unsigned long)gdev);
-	tasklet_init(&gdev->dpc_audio_tasklet[1], DpcForIsr_Audio1,
-		     (unsigned long)gdev);
-	tasklet_init(&gdev->dpc_audio_tasklet[2], DpcForIsr_Audio2,
-		     (unsigned long)gdev);
-	tasklet_init(&gdev->dpc_audio_tasklet[3], DpcForIsr_Audio3,
-		     (unsigned long)gdev);
+	tasklet_init(&hws_dev->dpc_audio_tasklet[0], DpcForIsr_Audio0,
+		     (unsigned long)hws_dev);
+	tasklet_init(&hws_dev->dpc_audio_tasklet[1], DpcForIsr_Audio1,
+		     (unsigned long)hws_dev);
+	tasklet_init(&hws_dev->dpc_audio_tasklet[2], DpcForIsr_Audio2,
+		     (unsigned long)hws_dev);
+	tasklet_init(&hws_dev->dpc_audio_tasklet[3], DpcForIsr_Audio3,
+		     (unsigned long)hws_dev);
 
 	//----------------------
-	ret = dma_mem_alloc_pool(gdev);
+	ret = dma_mem_alloc_pool(hws_dev);
 	if (ret != 0) {
 		goto err_mem_alloc;
 	}
 
-	InitVideoSys(gdev, 0);
-	StartKSThread(gdev);
+	InitVideoSys(hws_dev, 0);
+	StartKSThread(hws_dev);
 
-	hws_adapters_init(gdev);
-	gdev->wq = create_singlethread_workqueue("hws");
-	gdev->auwq = create_singlethread_workqueue("hws-audio");
+	hws_adapters_init(hws_dev);
+	hws_dev->wq = create_singlethread_workqueue("hws");
+	hws_dev->auwq = create_singlethread_workqueue("hws-audio");
 
-	if (hws_video_register(gdev))
+	if (hws_video_register(hws_dev))
 		goto err_mem_alloc;
 
-	if (hws_audio_register(gdev))
+	if (hws_audio_register(hws_dev))
 		goto err_mem_alloc;
 	return 0;
 err_mem_alloc:
 
-	gdev->m_bBufferAllocate = TRUE;
-	dma_mem_free_pool(gdev);
-	gdev->m_bBufferAllocate = FALSE;
+	hws_dev->m_bBufferAllocate = TRUE;
+	dma_mem_free_pool(hws_dev);
+	hws_dev->m_bBufferAllocate = FALSE;
 err_ctrl:
 	while (--i >= 0)
-		v4l2_ctrl_handler_free(&gdev->video[i].ctrl_handler);
+		v4l2_ctrl_handler_free(&hws_dev->video[i].ctrl_handler);
 err_register:
-	iounmap(gdev->info.mem[0].internal_addr);
-	hws_free_irqs(gdev);
+	iounmap(hws_dev->info.mem[0].internal_addr);
+	hws_free_irqs(hws_dev);
 disable_msi:
-	if (gdev->msix_enabled) {
-		pci_disable_msix(pdev);
-		gdev->msix_enabled = 0;
-	} else if (gdev->msi_enabled) {
-		pci_disable_msi(pdev);
-		gdev->msi_enabled = 0;
+	if (hws_dev->msix_enabled) {
+		pci_disable_msix(pci_dev);
+		hws_dev->msix_enabled = 0;
+	} else if (hws_dev->msi_enabled) {
+		pci_disable_msi(pci_dev);
+		hws_dev->msi_enabled = 0;
 	}
 release_regions:
-    pci_release_regions(pdev);
+    pci_release_regions(pci_dev);
 disable_device:
-    pci_disable_device(pdev);
+    pci_disable_device(pci_dev);
 err_release:
-	pci_release_regions(pdev);
-	pci_disable_device(pdev);
+	pci_release_regions(pci_dev);
+	pci_disable_device(pci_dev);
 	return err;
 err_alloc:
 	return -1;
