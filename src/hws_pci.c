@@ -11,6 +11,8 @@
 #include "hws_interrupt.h"
 #include "hws_video.h"
 
+#define DRV_NAME "HWS driver
+
 static const struct pci_device_id hws_pci_table[] = {
 	MAKE_ENTRY(0x8888, 0x9534, 0x8888, 0x0007, NULL),
 	MAKE_ENTRY(0x1F33, 0x8534, 0x8888, 0x0007, NULL),
@@ -527,7 +529,7 @@ static void __exit pcie_hws_exit(void)
 module_init(pcie_hws_init);
 module_exit(pcie_hws_exit);
 
-MODULE_DESCRIPTION("HWS driver");
+MODULE_DESCRIPTION(DRV_NAME);
 MODULE_AUTHOR("Sales <sales@avmatrix.com>");
 MODULE_LICENSE("GPL");
 MODULE_VERSION("1.0");
