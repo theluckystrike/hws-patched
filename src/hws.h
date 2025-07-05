@@ -195,61 +195,141 @@ struct hws_dmabuf{
 	dma_addr_t				dma;	
 };
 
-struct hws_video{
-	struct hws_pcie_dev		*dev;
-	struct v4l2_device		v4l2_dev;
-	struct video_device		vdev;
-	struct vb2_queue		vq;
-	struct list_head		queue;
-	int                     fileindex;
-	int                     startstreamIndex;
-	unsigned				seqnr;
-	struct mutex			video_lock;
-	struct mutex			queue_lock;
-	spinlock_t				slock;
-	v4l2_std_id				std;  //V4L2_STD_NTSC_M
-	u32						pixfmt; //V4L2_PIX_FMT_YUYV(fourcc)
-	int                     queryIndex;
-	int						index;
-	struct work_struct		videowork;
-	int						Interlaced;
-	//------------------------
-	int m_Curr_Brightness;
-	int m_Curr_Contrast;   
-	int m_Curr_Saturation;
-	int m_Curr_Hue;       
-	//------------------------
-	int current_out_width;
-	int curren_out_height;
-	int current_out_framerate;
-	int current_out_pixfmt;
-	int current_out_size_index;
+/*
+| Old name              | New name             | Rationale                                               |
+| --------------------- | -------------------- | ------------------------------------------------------- |
+| `dev`                 | `parent`             | clarifies this is a back-pointer, not a `struct device` |
+| `v4l2_dev`            | `v4l2_device`        | expands abbreviation                                    |
+| `vdev`                | `video_device`       | ditto                                                   |
+| `vq`                  | `buffer_queue`       | describes purpose                                       |
+| `queue`               | `capture_queue`      | ditto                                                   |
+| `fileindex`           | `file_index`         | snake\_case, explicit word break                        |
+| `startstreamIndex`    | `stream_start_index` | clearer meaning                                         |
+| `seqnr`               | `sequence_number`    | full words                                              |
+| `video_lock`          | `state_lock`         | shows scope (global state)                              |
+| `queue_lock`          | `capture_queue_lock` | matches queue name                                      |
+| `slock`               | `irq_lock`           | explains usage                                          |
+| `std`                 | `tv_standard`        | expands to TV/video standard                            |
+| `pixfmt`              | `pixel_format`       | full words                                              |
+| `queryIndex`          | `query_index`        | snake\_case                                             |
+| `index`               | `channel_index`      | specifies what kind of index                            |
+| `videowork`           | `video_work`         | snake\_case                                             |
+| `Interlaced`          | `interlaced`         | lower-case boolean                                      |
+| `m_Curr_*` group      | `current_*`          | remove Hungarian-style prefix                           |
+| `current_out_*` group | `output_*`           | shorter but still clear                                 |
+| `ctrl_handler`        | `control_handler`    | expands abbreviation                                    |
+| `*_ctrl` pointers     | `*_control`          | ditto; replaces `hpd` with `hotplug_detect`             |
+*/
 
-	struct v4l2_ctrl_handler ctrl_handler;
-	struct v4l2_ctrl *detect_tx_5v_ctrl;
-	struct v4l2_ctrl *hpd_ctrl;
-	struct v4l2_ctrl *content_type;
-};
-	
-struct hws_audio{
-	struct hws_pcie_dev		*dev;
-	struct snd_card 		*card;	
-	struct snd_pcm_substream *substream;
-	struct work_struct		audiowork;
-	int						pos;
-	int						index;
-	int                         ring_offsize;
-	int                         ring_over_size;
-	void                        *resampled_buf;
-	u32                         resampled_buf_size;
-	spinlock_t                  ring_lock;
-    uint32_t                    ring_wpos_byframes;
-    uint32_t                    ring_size_byframes;
-    uint32_t                    period_size_byframes;
-    uint32_t                    period_used_byframes;
-	u32                         sample_rate_out;
-    u16                         channels;
-    u16                         bits_per_sample;
+struct hws_video {
+	/* ───── linkage ───── */
+	struct hws_pcie_dev     *parent;              /* parent device */
+
+	/* ───── V4L2 framework objects ───── */
+	struct v4l2_device       v4l2_device;
+	struct video_device      video_device;
+	struct vb2_queue         buffer_queue;
+	struct list_head         capture_queue;
+
+	/* ───── file & stream bookkeeping ───── */
+	int                      file_index;
+	int                      stream_start_index;
+	unsigned int             sequence_number;
+
+	/* ───── locking ───── */
+	struct mutex             state_lock;          /* primary state */
+	struct mutex             capture_queue_lock;  /* list_head guard */
+	spinlock_t               irq_lock;            /* ISR-side */
+
+	/* ───── format / standard ───── */
+	v4l2_std_id              tv_standard;         /* e.g. V4L2_STD_NTSC_M */
+	u32                      pixel_format;        /* e.g. V4L2_PIX_FMT_YUYV */
+
+	/* ───── indices ───── */
+	int                      query_index;
+	int                      channel_index;
+
+	/* ───── async helpers ───── */
+	struct work_struct       video_work;
+
+	/* ───── misc flags ───── */
+	bool                     interlaced;
+
+	/* ───── colour controls ───── */
+	int                      current_brightness;
+	int                      current_contrast;
+	int                      current_saturation;
+	int                      current_hue;
+
+	/* ───── active output configuration ───── */
+	int                      output_width;
+	int                      output_height;
+	int                      output_frame_rate;
+	int                      output_pixel_format;
+	int                      output_size_index;
+
+	/* ───── V4L2 controls ───── */
+	struct v4l2_ctrl_handler control_handler;
+	struct v4l2_ctrl        *detect_tx_5v_control;
+	struct v4l2_ctrl        *hotplug_detect_control;
+	struct v4l2_ctrl        *content_type_control;
+};	
+
+/*
+| Old name               | New name                    | Reasoning                                         |
+| ---------------------- | --------------------------- | ------------------------------------------------- |
+| `dev`                  | `parent`                    | mirrors video struct; clarifies intent            |
+| `card`                 | `sound_card`                | expands meaning                                   |
+| `substream`            | `pcm_substream`             | keeps standard “pcm” but drops abbreviation “snd” |
+| `audiowork`            | `audio_work`                | snake\_case                                       |
+| `index`                | `channel_index`             | specifies what is being indexed                   |
+| `pos`                  | `buffer_position`           | describes purpose                                 |
+| `ring_offsize`         | `ring_offset_bytes`         | explicit unit & spelling                          |
+| `ring_over_size`       | `ring_overflow_bytes`       | clearer meaning                                   |
+| `resampled_buf`        | `resampled_buffer`          | expands abbreviation                              |
+| `resampled_buf_size`   | `resampled_buffer_size`     | ditto                                             |
+| `ring_lock`            | *unchanged*                 | already descriptive                               |
+| `ring_wpos_byframes`   | `ring_write_pos_frames`     | snake\_case + unit                                |
+| `ring_size_byframes`   | `ring_size_frames`          | ditto                                             |
+| `period_size_byframes` | `period_size_frames`        | ditto                                             |
+| `period_used_byframes` | `period_used_frames`        | ditto                                             |
+| `sample_rate_out`      | `output_sample_rate`        | clearer                                           |
+| `channels`             | `channel_count`             | full word                                         |
+| `bits_per_sample`      | *unchanged* (already clear) | —                                                 |
+
+ */
+struct hws_audio {
+	/* ───── linkage ───── */
+	struct hws_pcie_dev        *parent;             /* back-pointer */
+
+	/* ───── ALSA objects ───── */
+	struct snd_card            *sound_card;         /* returned by snd_card_new() */
+	struct snd_pcm_substream   *pcm_substream;
+
+	/* ───── async helper ───── */
+	struct work_struct          audio_work;
+
+	/* ───── indexing & position ───── */
+	int                         channel_index;      /* 0 … MAX_VID_CHANNELS-1 */
+	int                         buffer_position;    /* current play/capture head */
+
+	/* ───── ring-buffer layout ───── */
+	int                         ring_offset_bytes;      /* DMA start offset     */
+	int                         ring_overflow_bytes;    /* overrun protection   */
+	spinlock_t                  ring_lock;              /* guards fields below  */
+	u32                         ring_write_pos_frames;  /* write pointer (frames) */
+	u32                         ring_size_frames;       /* total size (frames)     */
+	u32                         period_size_frames;     /* ALSA period size        */
+	u32                         period_used_frames;     /* frames consumed so far  */
+
+	/* ───── resampling workspace ───── */
+	void                       *resampled_buffer;
+	u32                         resampled_buffer_size;
+
+	/* ───── PCM format ───── */
+	u32                         output_sample_rate; /* Hz */
+	u16                         channel_count;      /* 1 = mono, 2 = stereo … */
+	u16                         bits_per_sample;    /* 16, 24, 32 …           */
 };
 	
 /*
