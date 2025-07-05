@@ -45,64 +45,6 @@ static void StopDsp(struct hws_pcie_dev *pdx)
 	WRITE_REGISTER_ULONG(pdx, HWS_REG_VCAP_ENABLE, 0x00);
 }
 
-//----------------------------------------------
-
-void SetHardWareInfo(struct hws_pcie_dev *pdx)
-{
-	switch (pdx->dwDeviceID) {
-	case 0x9534:
-	case 0x6524:
-	case 0x8524: {
-		pdx->m_nCurreMaxVideoChl = 4;
-		pdx->m_nCurreMaxLineInChl = 1;
-		pdx->m_MaxHWVideoBufferSize = MAX_MM_VIDEO_SIZE;
-		break;
-	}
-	case 0x8532: {
-		pdx->m_nCurreMaxVideoChl = 2;
-		pdx->m_nCurreMaxLineInChl = 1;
-		pdx->m_MaxHWVideoBufferSize = MAX_MM_VIDEO_SIZE;
-		break;
-	}
-	case 0x8512:
-	case 0x6502: {
-		pdx->m_nCurreMaxVideoChl = 2;
-		pdx->m_nCurreMaxLineInChl = 0;
-		pdx->m_MaxHWVideoBufferSize = MAX_MM_VIDEO_SIZE;
-		break;
-	}
-	case 0x8501: {
-		pdx->m_nCurreMaxVideoChl = 1;
-		pdx->m_nCurreMaxLineInChl = 0;
-		pdx->m_MaxHWVideoBufferSize = MAX_MM_VIDEO_SIZE;
-		break;
-	}
-	default: {
-		pdx->m_nCurreMaxVideoChl = 4;
-		pdx->m_nCurreMaxLineInChl = 0;
-		pdx->m_MaxHWVideoBufferSize = MAX_MM_VIDEO_SIZE;
-		break;
-	}
-	}
-	//-----------------------
-	if (pdx->m_Device_Version > 121) {
-		if ((pdx->dwDeviceID == 0x8501) &&
-		    (pdx->m_Device_Version == 122)) {
-			pdx->m_DeviceHW_Version = 0;
-		} else {
-			//DWORD m_ReadTmp;
-			pdx->m_DeviceHW_Version = 1;
-			//--- set DMA_MAX_SIZE
-			WRITE_REGISTER_ULONG(pdx, HWS_REG_DMA_MAX_SIZE,
-					     (MAX_VIDEO_SCLAER_SIZE / 16));
-			//m_ReadTmp = ReadDevReg((DWORD)(CVBS_IN_BASE + (9 * PCIE_BARADDROFSIZE)));
-			//DbgPrint("[MV]DMA_MAX_SIZE =%d\n",m_ReadTmp);
-		}
-	} else {
-		pdx->m_DeviceHW_Version = 0;
-	}
-	//------------------
-}
 
 //---------------------------------------
 void CheckCardStatus(struct hws_pcie_dev *pdx)

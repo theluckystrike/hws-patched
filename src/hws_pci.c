@@ -12,6 +12,18 @@
 #include "hws_video.h"
 
 #define DRV_NAME "HWS driver
+#define HWS_REG_DEVICE_INFO   0x0000
+#define HWS_REG_DEC_MODE      0x0004
+
+/* register layout inside HWS_REG_DEVICE_INFO */
+#define DEVINFO_VER          GENMASK( 7,  0)
+#define DEVINFO_SUBVER       GENMASK(15,  8)
+#define DEVINFO_YV12         GENMASK(31, 28)
+#define DEVINFO_HWKEY        GENMASK(27, 24)
+#define DEVINFO_PORTID       GENMASK(25, 24)   /* low 2 bits of HW-key */
+
+#define MAX_MM_VIDEO_SIZE     (1920 * 1080 * 2)
+#define MAX_DMA_AUDIO_PK_SIZE (128 * 16 * 4)
 
 static const struct pci_device_id hws_pci_table[] = {
 	MAKE_ENTRY(0x8888, 0x9534, 0x8888, 0x0007, NULL),
@@ -36,62 +48,90 @@ static void enable_pcie_relaxed_ordering(struct pci_dev *dev)
 	pcie_capability_set_word(dev, PCI_EXP_DEVCTL, PCI_EXP_DEVCTL_RELAX_EN);
 }
 
+static void hws_configure_hardware_capabilities(struct hws_pcie_dev *hdev)
+{
+	u16 id = hdev->device_id;
+
+	/* select per-chip channel counts */
+	switch (id) {
+	case 0x9534: case 0x6524: case 0x8524:
+		hdev->cur_max_video_ch   = 4;
+		hdev->cur_max_linein_ch  = 1;
+		break;
+	case 0x8532:
+		hdev->cur_max_video_ch   = 2;
+		hdev->cur_max_linein_ch  = 1;
+		break;
+	case 0x8512: case 0x6502:
+		hdev->cur_max_video_ch   = 2;
+		hdev->cur_max_linein_ch  = 0;
+		break;
+	case 0x8501:
+		hdev->cur_max_video_ch   = 1;
+		hdev->cur_max_linein_ch  = 0;
+		break;
+	default:
+		hdev->cur_max_video_ch   = 4;
+		hdev->cur_max_linein_ch  = 0;
+		break;
+	}
+
+	/* universal buffer capacity */
+	hdev->max_hw_video_buf_sz = MAX_MM_VIDEO_SIZE;
+
+	/* decide hardware-version and program DMA max size if needed */
+	if (hdev->device_ver > 121) {
+		if (id == 0x8501 && hdev->device_ver == 122) {
+			hdev->hw_ver = 0;
+		} else {
+			hdev->hw_ver = 1;
+			/* DMA max size is scaler size / 16 */
+			hws_write32(hdev, HWS_REG_DMA_MAX_SIZE,
+				    MAX_VIDEO_SCALER_SIZE >> 4);
+		}
+	} else {
+		hdev->hw_ver = 0;
+	}
+}
+
 static int read_chip_id(struct hws_pcie_dev *pdx)
 {
-	//  CCIR_PACKET      reg;
-	//int Chip_id1 = 0;
-	int ret = 0;
-	//int reg_vaule = 0;
-	//int nResult;
-	int i;
-	//------read Dvice Version
-	ULONG m_dev_ver;
-	ULONG m_tmpVersion;
-	ULONG m_tmpHWKey;
-	//ULONG m_OEM_code_data;
-	m_dev_ver = READ_REGISTER_ULONG(pdx, HWS_REG_DEVICE_INFO);
+	u32   reg;
+	int   i;
 
-	/* Bits 7:0   = device version */
-	m_tmpVersion = m_dev_ver >> 8;
-	pdx->m_Device_Version = (m_tmpVersion & 0xFF);
+	/* ── read the on-chip device-info register ─────────────────── */
+	reg = hws_read32(hdev, HWS_REG_DEVICE_INFO);
 
-	/* Bits 15:8  = device subversion */
-	m_tmpVersion = m_dev_ver >> 16;
-	pdx->m_Device_SubVersion = (m_tmpVersion & 0xFF);
+	hdev->device_ver      = FIELD_GET(DEVINFO_VER,   reg);
+	hdev->sub_ver         = FIELD_GET(DEVINFO_SUBVER, reg);
+	hdev->support_yv12    = FIELD_GET(DEVINFO_YV12,   reg);
+	hdev->port_id         = FIELD_GET(DEVINFO_PORTID, reg);
 
-	/* Bits 31:28 = YV12 support flags (4 bits) */
-	pdx->m_Device_SupportYV12 = ((m_dev_ver >> 28) & 0x0F);
+	/* ── fill in static capabilities ───────────────────────────── */
+	hdev->max_hw_video_buf_sz = MAX_MM_VIDEO_SIZE;
+	hdev->max_channels        = 4;
+	hdev->buf_allocated       = false;
+	hdev->main_task           = NULL;
+	hdev->audio_pkt_size      = MAX_DMA_AUDIO_PK_SIZE;
+	hdev->start_run           = false;
+	hdev->pci_lost            = 0;
 
-	/* Bits 27:24 = HW key; low two bits of that = port ID */
-	m_tmpHWKey = (m_dev_ver >> 24) & 0x0F;
-	pdx->m_Device_PortID = (m_tmpHWKey & 0x03);
+	/* ── per-channel defaults ──────────────────────────────────── */
+	for (i = 0; i < hdev->max_channels; i++)
+		set_video_format_size(hdev, i, 1920, 1080);
 
-	//n_VideoModle =	READ_REGISTER_ULONG(pdx,0x4000+(4*PCIE_BARADDROFSIZE));
-	//n_VideoModle = (n_VideoModle>>8)&0xFF;
-	//pdx->m_IsHDModel = 1;
-	pdx->m_MaxHWVideoBufferSize = MAX_MM_VIDEO_SIZE;
-	pdx->m_nMaxChl = 4;
-	pdx->m_bBufferAllocate = FALSE;
-	pdx->mMain_tsk = NULL;
-	pdx->m_dwAudioPTKSize = MAX_DMA_AUDIO_PK_SIZE; //128*16*4;
-	pdx->m_bStartRun = 0;
-	pdx->m_PciDeviceLost = 0;
+	/* ── reset decoder core ───────────────────────────────────── */
+	hws_write32(hdev, HWS_REG_DEC_MODE, 0x00);
+	hws_write32(hdev, HWS_REG_DEC_MODE, 0x10);
 
-	//--------
-	for (i = 0; i < MAX_VID_CHANNELS; i++) {
-		SetVideoFormatSize(pdx, i, 1920, 1080);
-	}
-	//-------
-	WRITE_REGISTER_ULONG(pdx, HWS_REG_DEC_MODE, 0x0);
-	//ssleep(100);
-	WRITE_REGISTER_ULONG(pdx, HWS_REG_DEC_MODE, 0x10);
-	//ssleep(500);
-	//-------
-	SetHardWareInfo(pdx);
-	printk("************[HW]-[VIDV]=[%d]-[%d]-[%d] ************\n",
-	       pdx->m_Device_Version, pdx->m_Device_SubVersion,
-	       pdx->m_Device_PortID);
-	return ret;
+	hws_configure_hardware_capabilities(hdev);
+
+	dev_info(&hdev->pdev->dev,
+		 "chip detected: ver=%u subver=%u port=%u yv12=%u\n",
+		 hdev->device_ver, hdev->sub_ver,
+		 hdev->port_id, hdev->support_yv12);
+
+	return 0;
 }
 
 int hws_video_init_channel(struct hws_pcie_dev *dev, int idx);
@@ -230,6 +270,16 @@ err_release:
 	return err;
 err_alloc:
 	return -1;
+err_cleanup:
+    /* Teardown any channels that got initialized */
+    while (--i >= 0) {
+        snd_card_free(dev->audio[i].sound_card);
+        v4l2_device_unregister(&dev->video[i].v4l2_device);
+    }
+    destroy_workqueue(dev->video_wq);
+    destroy_workqueue(dev->audio_wq);
+    pci_disable_device(pdev);
+    return ret;
 }
 
 void hws_remove(struct pci_dev *pdev)
@@ -523,22 +573,14 @@ int probe_scan_for_msi(struct hws_pcie_dev *lro, struct pci_dev *pdev)
 	return rc;
 }
 
-void WRITE_REGISTER_ULONG(struct hws_pcie_dev *pdx, u32 RegisterOffset,
-			  u32 Value)
+static inline void hws_write32(struct hws_pcie_dev *hdev, u32 off, u32 val)
 {
-	//map_bar0_addr[RegisterOffset/4] = Value;
-	char *bar0;
-	bar0 = (char *)pdx->map_bar0_addr;
-	iowrite32(Value, bar0 + RegisterOffset);
-	//map_bar0_addr[RegisterOffset/4] = Value;
+	writel(val, hdev->bar0_base + off);
 }
 
-u32 READ_REGISTER_ULONG(struct hws_pcie_dev *pdx, u32 RegisterOffset)
+static inline u32 hws_read32(struct hws_pcie_dev *hdev, u32 off)
 {
-	char *bar0;
-	bar0 = (char *)pdx->map_bar0_addr;
-	//return(map_bar0_addr[RegisterOffset/4]);
-	return (ioread32(bar0 + RegisterOffset));
+	return readl(hdev->bar0_base + off);
 }
 
 static struct pci_driver hws_pci_driver = {
