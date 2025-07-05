@@ -94,6 +94,9 @@ static int read_chip_id(struct hws_pcie_dev *pdx)
 	return ret;
 }
 
+int hws_video_init_channel(struct hws_pcie_dev *dev, int idx);
+int hws_audio_init_channel(struct hws_pcie_dev *dev, int idx);
+
 static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id)
 {
 	struct hws_pcie_dev *hws_dev= NULL;
@@ -151,108 +154,15 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
 
 	pci_set_drvdata(pci_dev, hws_dev);
 	read_chip_id(hws_dev);
-
-	for (i = 0; i < MAX_VID_CHANNELS; i++) {
-		struct hws_video *vid = &hws_dev->video[i];
-		struct v4l2_ctrl_handler *hdl = &vid->ctrl_handler;
-
-		/* 1. Allocate the per-device control handler (room for 2 controls) */
-		v4l2_ctrl_handler_init(hdl, 2);
-
-		/* 2. Create the “5-V detect” boolean (volatile) */
-		vid->detect_tx_5v_ctrl = v4l2_ctrl_new_std(
-			hdl, &hws_ctrl_ops, V4L2_CID_DV_RX_POWER_PRESENT, 0, 1,
-			1, 0);
-		/* mark it volatile + read-only */
-		vid->detect_tx_5v_ctrl->flags |= V4L2_CTRL_FLAG_VOLATILE |
-						 V4L2_CTRL_FLAG_READ_ONLY;
-
-		/* 4. Create the “IT content-type” enum (volatile) */
-		vid->content_type = v4l2_ctrl_new_std(
-			hdl, &hws_ctrl_ops, V4L2_CID_DV_RX_IT_CONTENT_TYPE,
-			V4L2_DV_IT_CONTENT_TYPE_NO_ITC,
-			V4L2_DV_IT_CONTENT_TYPE_GRAPHICS, 1,
-			V4L2_DV_IT_CONTENT_TYPE_NO_ITC);
-
-		vid->content_type->flags |= V4L2_CTRL_FLAG_VOLATILE |
-					    V4L2_CTRL_FLAG_READ_ONLY;
-
-		v4l2_ctrl_handler_setup(hdl);
-
-		/* 5. Bail out cleanly if ctrl creation failed */
-		if (hdl->error) {
-			ret = hdl->error;
-			dev_err(&pci_dev->dev,
-				"ctrl-handler init failed on channel %d: %d\n",
-				i, ret);
-			goto err_ctrl;
-		}
-	//hws_dev->m_nVideoIndex[i] =0;
-	hws_dev->m_nRDVideoIndex[i] = 0;
-	hws_dev->m_bVCapIntDone[i] = 0;
-	hws_dev->m_nVideoBusy[i] = 0;
-	hws_dev->m_bChangeVideoSize[i] = 0;
-	hws_dev->m_nVideoBufferIndex[i] = 0;
-	hws_dev->m_nVideoHalfDone[i] = 0;
-	hws_dev->m_pVideoEvent[i] = 0;
-	SetVideoFormatSize(hws_dev, i, 1920, 1080);
-	hws_dev->m_bVCapStarted[i] = 0;
-	hws_dev->m_bVideoStop[i] = 0;
-	hws_dev->video_data[i] = 0;
-	//----------------------
-	hws_dev->m_contrast[i] = 0x80;
-	hws_dev->m_brightness[i] = 0x80;
-	hws_dev->m_saturation[i] = 0x80;
-	hws_dev->m_hue[i] = 0x80;
-	hws_dev->m_dwSWFrameRate[i] = 0;
-	hws_dev->m_pbyVideoBuffer[i] = NULL;
-	hws_dev->m_VideoInfo[i].dwisRuning = 0;
-	hws_dev->m_VideoInfo[i].m_nVideoIndex = 0;
-	hws_dev->m_VideoInfo[i].m_pVideoScalerBuf = NULL;
-	hws_dev->m_VideoInfo[i].m_pVideoYUV2Buf = NULL;
-	hws_dev->m_VideoInfo[i].m_pRotateVideoBuf = NULL;
-	for (j = 0; j < MAX_VIDEO_QUEUE; j++) {
-		hws_dev->m_pVCAPStatus[i][j].byLock = MEM_UNLOCK;
-		hws_dev->m_pVCAPStatus[i][j].byField = 0;
-		hws_dev->m_pVCAPStatus[i][j].byPath = 2;
-		hws_dev->m_pVCAPStatus[i][j].dwWidth = 1920;
-		hws_dev->m_pVCAPStatus[i][j].dwHeight = 1080;
-		hws_dev->m_pVCAPStatus[i][j].dwinterlace = 0;
-		hws_dev->m_pVCAPStatus[i][j].dwFrameRate = 60;
-		hws_dev->m_pVCAPStatus[i][j].dwOutWidth = 1920;
-		hws_dev->m_pVCAPStatus[i][j].dwOutHeight = 1080;
-		//hws_dev->m_pVideoData[i][j] = NULL;
-		//------------------
-		hws_dev->video_info[i].video_buf[j] = NULL;
-		// hws_dev->video_info[i].m_pVideoBufData1[j] = NULL;
-		// hws_dev->video_info[i].m_pVideoBufData2[j] = NULL;
-		// hws_dev->video_info[i].m_pVideoBufData3[j] = NULL;
-		hws_dev->video_info[i].status[j].lock = MEM_UNLOCK;
-		//----------------
-		//--------audio
-		hws_dev->m_pAudioEvent[i] = 0;
-		hws_dev->m_bACapStarted[i] = 0;
-		hws_dev->m_bAudioRun[i] = 0;
-		hws_dev->m_bAudioStop[i] = 0;
-		hws_dev->m_nAudioBusy[i] = 0;
-		hws_dev->m_nRDAudioIndex[i] = 0;
-		//sema_init(&hws_dev->sem_video[i],1);
-		//spin_lock_init(&hws_dev->video_lock[i]);
-		spin_lock_init(&hws_dev->videoslock[i]);
-		spin_lock_init(&hws_dev->audiolock[i]);
-		//mutex_init(&hws_dev->video_mutex[i]);
-		//init_waitqueue_head(&hws_dev->wq_video[i]);
-		//hws_dev->wq_flag[i]=0;
-		hws_dev->audio_info[i].running = 0;
-		hws_dev->audio_info[i].index = 0;
-		hws_dev->audio[i].resampled_buf = NULL;
-		for (j = 0; j < MAX_AUDIO_QUEUE; j++) {
-			hws_dev->audio_info[i].audio_buf[j] = NULL;
-			hws_dev->audio_info[i].status[j].lock = MEM_UNLOCK;
-		}
-		//hws_dev->video[i].v4l2_dev = NULL;
-	}
-	}
+    /* Initialize each video/audio channel */
+    for (i = 0; i < dev->max_channels; i++) {
+        ret = hws_video_init_channel(dev, i);
+        if (ret)
+            goto err_cleanup;
+        ret = hws_audio_init_channel(dev, i);
+        if (ret)
+            goto err_cleanup;
+    }
 	//---------------------
 	tasklet_init(&hws_dev->dpc_video_tasklet[0], DpcForIsr_Video0,
 		     (unsigned long)hws_dev);
@@ -386,6 +296,138 @@ void hws_remove(struct pci_dev *pdev)
 	pci_set_drvdata(pdev, NULL);
 	//printk("hws_remove  Done\n");
 }
+
+/* ─────────────────────────────────────────────────────────── */
+/* Per-video-channel initialisation                            */
+
+static int hws_video_init_channel(struct hws_pcie_dev *pdev, int ch)
+{
+	struct hws_video              *vid  = &pdev->video[ch];
+	struct v4l2_ctrl_handler      *hdl  = &vid->control_handler;
+	int                            q;
+
+	/* ── zero and basic identity ─────────────────────────── */
+	memset(vid, 0, sizeof(*vid));
+	vid->parent         = pdev;
+	vid->channel_index  = ch;
+	vid->query_index    = 0;
+	vid->tv_standard    = V4L2_STD_NTSC_M;
+	vid->pixel_format   = V4L2_PIX_FMT_YUYV;
+	vid->output_width   = 1920;
+	vid->output_height  = 1080;
+	vid->output_frame_rate   = 60;
+	vid->output_pixel_format = V4L2_PIX_FMT_YUYV;
+	vid->output_size_index   = 0;
+	vid->current_brightness  =
+	vid->current_contrast    =
+	vid->current_saturation  =
+	vid->current_hue         = 0x80;     /* mid-range defaults */
+
+	/* ── locking & async helpers ─────────────────────────── */
+	mutex_init(&vid->state_lock);
+	mutex_init(&vid->capture_queue_lock);
+	spin_lock_init(&vid->irq_lock);
+	INIT_WORK(&vid->video_work, hws_video_work_fn);
+	INIT_LIST_HEAD(&vid->capture_queue);
+
+	/* ── V4L2 control handler (detect-5 V + IT-content) ─── */
+	v4l2_ctrl_handler_init(hdl, 2);
+
+	vid->detect_tx_5v_control = v4l2_ctrl_new_std(
+		hdl, &hws_ctrl_ops,
+		V4L2_CID_DV_RX_POWER_PRESENT, 0, 1, 1, 0);
+	if (vid->detect_tx_5v_control)
+		vid->detect_tx_5v_control->flags |=
+			V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_READ_ONLY;
+
+	vid->content_type_control = v4l2_ctrl_new_std(
+		hdl, &hws_ctrl_ops,
+		V4L2_CID_DV_RX_IT_CONTENT_TYPE,
+		V4L2_DV_IT_CONTENT_TYPE_NO_ITC,
+		V4L2_DV_IT_CONTENT_TYPE_GRAPHICS, 1,
+		V4L2_DV_IT_CONTENT_TYPE_NO_ITC);
+	if (vid->content_type_control)
+		vid->content_type_control->flags |=
+			V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_READ_ONLY;
+
+	if (hdl->error) {
+		dev_err(&pdev->pdev->dev,
+			"V4L2 ctrl init failed on ch %d: %d\n",
+			ch, hdl->error);
+		return hdl->error;
+	}
+
+	/* ── per-queue status defaults ───────────────────────── */
+	for (q = 0; q < MAX_VIDEO_QUEUE; q++) {
+		vid->info.status[q].lock       = MEM_UNLOCK;
+		vid->vcap_status[q].byLock     = MEM_UNLOCK;
+		vid->vcap_status[q].byField    = 0;
+		vid->vcap_status[q].byPath     = 2;
+		vid->vcap_status[q].dwWidth    = 1920;
+		vid->vcap_status[q].dwHeight   = 1080;
+		vid->vcap_status[q].dwinterlace= 0;
+		vid->vcap_status[q].dwFrameRate= 60;
+		vid->vcap_status[q].dwOutWidth = 1920;
+		vid->vcap_status[q].dwOutHeight= 1080;
+		vid->info.video_buf[q]         = NULL;
+	}
+
+	/* ── runtime flags ───────────────────────────────────── */
+	vid->busy           = false;
+	vid->stop           = false;
+	vid->int_done       = false;
+	vid->sequence_number= 0;
+
+	return 0;
+}
+
+/* ─────────────────────────────────────────────────────────── */
+/* Per-audio-channel initialisation                            */
+
+static int hws_audio_init_channel(struct hws_pcie_dev *pdev, int ch)
+{
+	struct hws_audio *aud = &pdev->audio[ch];
+	int               q, err;
+
+	memset(aud, 0, sizeof(*aud));
+	aud->parent        = pdev;
+	aud->channel_index = ch;
+	aud->output_sample_rate = 48000;
+	aud->channel_count      = 2;
+	aud->bits_per_sample    = 16;
+
+	spin_lock_init(&aud->ring_lock);
+	INIT_WORK(&aud->audio_work, hws_audio_work_fn);
+
+	/* ring-buffer bookkeeping defaults */
+	aud->ring_size_frames       = 0;
+	aud->ring_write_pos_frames  = 0;
+	aud->period_size_frames     = 0;
+	aud->period_used_frames     = 0;
+	aud->ring_offset_bytes      = 0;
+	aud->ring_overflow_bytes    = 0;
+
+	/* ALSA card skeleton */
+	err = snd_card_new(&pdev->pdev->dev, -1, NULL,
+			   THIS_MODULE, 0, &aud->sound_card);
+	if (err)
+		return err;
+
+	/* you would typically create PCM device(s) here, e.g.:
+	 * err = hws_pcm_create(aud);
+	 * if (err)
+	 *     return err;
+	 */
+
+	/* init per-queue status */
+	for (q = 0; q < MAX_AUDIO_QUEUE; q++) {
+		pdev->audio_info[ch].status[q].lock = MEM_UNLOCK;
+		pdev->audio_info[ch].audio_buf[q]   = NULL;
+	}
+
+	return 0;
+}
+
 
 static struct hws_pcie_dev *hws_alloc_dev_instance(struct pci_dev *pdev)
 {
