@@ -176,6 +176,8 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
 
 	enable_pcie_relaxed_ordering(pci_dev);
 	pci_set_master(pci_dev);
+
+	// TODO: cleanup comments, check deprecation
 	ret = probe_scan_for_msi(hws_dev, pci_dev);
 
 	if (ret < 0)
@@ -188,6 +190,7 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
 	hws_dev->video_wq = NULL;
 	hws_dev->audio_w = NULL;
 
+	// TODO: comment cleanup, new vars
 	ret = hws_irq_setup(hws_dev, pci_dev);
 	if (ret)
 		goto err_register;
@@ -203,6 +206,7 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
         if (ret)
             goto err_cleanup;
     }
+    	// FIXME: this code is messed up
 	ret = dma_mem_alloc_pool(hws_dev);
 	if (ret != 0) {
 		goto err_mem_alloc;
@@ -369,8 +373,6 @@ static int hws_video_init_channel(struct hws_pcie_dev *pdev, int ch)
 	spin_lock_init(&vid->irq_lock);
 
 	INIT_LIST_HEAD(&vid->capture_queue);
-	// FIXME
-	INIT_WORK(&vid->video_work, hws_video_work_fn);   /* your worker */
 
 	/* ── DMA bookkeeping is “empty” for now ─────────────────────── */
 	vid->buf_phys_addr   = 0;
@@ -461,9 +463,6 @@ static int hws_audio_init_channel(struct hws_pcie_dev *pdev, int ch)
 
 	/* ── synchronisation primitives / workers ──────────────────── */
 	spin_lock_init(&aud->ring_lock);
-
-	// FIXME
-	INIT_WORK(&aud->audio_work, hws_audio_work_fn);
 
 	/* ── ring-buffer bookkeeping defaults ──────────────────────── */
 	aud->ring_size_frames      = 0;
