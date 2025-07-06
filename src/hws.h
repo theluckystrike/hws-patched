@@ -395,10 +395,6 @@ struct hws_pcie_dev {
 	void __iomem              *bar0_base;
 	struct workqueue_struct   *video_wq;
 	struct workqueue_struct   *audio_wq;
-	unsigned long              video_priv[MAX_VID_CHANNELS];
-	struct tasklet_struct      video_tlet[MAX_VID_CHANNELS];
-	unsigned long              audio_priv[MAX_VID_CHANNELS];
-	struct tasklet_struct      audio_tlet[MAX_VID_CHANNELS];
 
 	/* ───── interrupt bookkeeping ───── */
 	int                        irq_line;          /* < 0 = none */
@@ -421,52 +417,8 @@ struct hws_pcie_dev {
 	u8                         cur_max_linein_ch;
 	bool                       start_run;
 
-	/* ───── video buffers ───── */
-	dma_addr_t                 video_phys[MAX_VID_CHANNELS];
-	u8                        *video_buf[MAX_VID_CHANNELS];
-	u32                        video_buf_len[MAX_VID_CHANNELS];
-	u32                        video_buf_high[MAX_VID_CHANNELS];
-	struct vcap_status         vcap_status[MAX_VID_CHANNELS][MAX_VIDEO_QUEUE];
-	struct acap_video_info     video_info[MAX_VID_CHANNELS];
-	struct hws_video_fmt       video_fmt[MAX_VID_CHANNELS];
-	bool                       video_size_changed[MAX_VID_CHANNELS];
-
-	/* ───── audio buffers ───── */
-	dma_addr_t                 audio_phys[MAX_VID_CHANNELS];
-	u8                        *audio_buf[MAX_VID_CHANNELS];
-	u8                        *audio_data[MAX_VID_CHANNELS];
-	u8                        *audio_data_area[MAX_VID_CHANNELS];
-	u32                        audio_buf_len[MAX_VID_CHANNELS];
-	u32                        audio_buf_high[MAX_VID_CHANNELS];
 	bool                       buf_allocated;
-
-	/* ───── capture state ───── */
-	bool                       vcap_started[MAX_VID_CHANNELS];
-	bool                       acap_started[MAX_VID_CHANNELS];
-	u8                         video_busy[MAX_VID_CHANNELS];
-	bool                       video_stop[MAX_VID_CHANNELS];
-	int                        rd_video_idx[MAX_VID_CHANNELS];
-	int                        video_buf_idx[MAX_VID_CHANNELS];
-	int                        video_half_done[MAX_VID_CHANNELS];
-	u8                         audio_busy[MAX_VID_CHANNELS];
-	u8                         audio_buf_idx[MAX_VID_CHANNELS];
-	u8                         audio_event[MAX_VID_CHANNELS];
-	u8                         video_event[MAX_VID_CHANNELS];
-	bool                       vcap_int_done[MAX_VID_CHANNELS];
-	bool                       audio_running[MAX_VID_CHANNELS];
-	bool                       audio_stop[MAX_VID_CHANNELS];
-	int                        rd_audio_idx[MAX_VID_CHANNELS];
 	u32                        audio_pkt_size;
-
-	/* ───── misc per-channel counters ───── */
-	int                        no_video_cnt[MAX_VID_CHANNELS];
-	int                        sw_framerate[MAX_VID_CHANNELS];
-
-	/* ───── colour controls ───── */
-	u32                        contrast[MAX_VID_CHANNELS];
-	u32                        brightness[MAX_VID_CHANNELS];
-	u32                        saturation[MAX_VID_CHANNELS];
-	u32                        hue[MAX_VID_CHANNELS];
 
 	/* ───── kernel thread ───── */
 	struct task_struct        *main_task;
