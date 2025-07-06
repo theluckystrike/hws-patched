@@ -433,60 +433,84 @@ static int hws_video_init_channel(struct hws_pcie_dev *pdev, int ch)
 }
 
 
-/* ─────────────────────────────────────────────────────────── */
-/* Per-audio-channel initialisation                            */
-
+/*  Initialise one audio channel                                       */
+/* ------------------------------------------------------------------ */
 static int hws_audio_init_channel(struct hws_pcie_dev *pdev, int ch)
 {
 	struct hws_audio *aud = &pdev->audio[ch];
 	int               q, err;
 
+	/* ── zero entire per-channel struct ─────────────────────────── */
 	memset(aud, 0, sizeof(*aud));
+
+	/* ── identify parent + channel index ───────────────────────── */
 	aud->parent        = pdev;
 	aud->channel_index = ch;
-	aud->output_sample_rate = 48000;
-	aud->channel_count      = 2;
-	aud->bits_per_sample    = 16;
 
+	/* ── default PCM parameters (48-kHz / stereo / 16-bit) ─────── */
+	aud->output_sample_rate  = 48000;
+	aud->channel_count       = 2;
+	aud->bits_per_sample     = 16;
+
+	/* ── synchronisation primitives / workers ──────────────────── */
 	spin_lock_init(&aud->ring_lock);
 	INIT_WORK(&aud->audio_work, hws_audio_work_fn);
 
-	/* ring-buffer bookkeeping defaults */
-	aud->ring_size_frames       = 0;
-	aud->ring_write_pos_frames  = 0;
-	aud->period_size_frames     = 0;
-	aud->period_used_frames     = 0;
-	aud->ring_offset_bytes      = 0;
-	aud->ring_overflow_bytes    = 0;
+	/* ── ring-buffer bookkeeping defaults ──────────────────────── */
+	aud->ring_size_frames      = 0;
+	aud->ring_write_pos_frames = 0;
+	aud->period_size_frames    = 0;
+	aud->period_used_frames    = 0;
+	aud->ring_offset_bytes     = 0;
+	aud->ring_overflow_bytes   = 0;
 
-	/* ALSA card skeleton */
+	/* ── DMA pointers zero-ed until buffer alloc happens ───────── */
+	aud->buf_phys_addr   = 0;
+	aud->buf_virt        = NULL;
+	aud->data_buf        = NULL;
+	aud->data_area       = NULL;
+	aud->buf_size_bytes  = 0;
+	aud->buf_high_wmark  = 0;
+
+	/* ── capture-state flags ───────────────────────────────────── */
+	aud->cap_active      = false;   /* was m_bACapStarted */
+	aud->dma_busy        = 0;       /* was m_nAudioBusy   */
+	aud->stream_running  = false;   /* was m_bAudioRun    */
+	aud->stop_requested  = false;   /* was m_bAudioStop   */
+	aud->wr_idx          = 0;       /* was m_nAudioBufferIndex */
+	aud->rd_idx          = 0;       /* was m_nRDAudioIndex     */
+	aud->irq_event       = 0;       /* was m_pAudioEvent       */
+
+	/* ── resampling workspace cleared ──────────────────────────── */
+	aud->resampled_buffer      = NULL;
+	aud->resampled_buffer_size = 0;
+
+	/* ── ALSA card skeleton (optional for minimal build) ───────── */
 	err = snd_card_new(&pdev->pdev->dev, -1, NULL,
 			   THIS_MODULE, 0, &aud->sound_card);
 	if (err)
 		return err;
 
-	/* you would typically create PCM device(s) here, e.g.:
-	 * err = hws_pcm_create(aud);
-	 * if (err)
-	 *     return err;
-	 */
-
-	/* init per-queue status */
+	/* ── per-queue software status (if you keep acap_audio_info) – */
 	for (q = 0; q < MAX_AUDIO_QUEUE; q++) {
-		pdev->audio_info[ch].status[q].lock = MEM_UNLOCK;
-		pdev->audio_info[ch].audio_buf[q]   = NULL;
+		aud->chan_info.status[q].lock = MEM_UNLOCK;
+		aud->chan_info.audio_buf[q]   = NULL;
 	}
-	tasklet_init(&hws_dev->dpc_audio_tasklet[0], DpcForIsr_Audio0,
-		     (unsigned long)hws_dev);
-	tasklet_init(&hws_dev->dpc_audio_tasklet[1], DpcForIsr_Audio1,
-		     (unsigned long)hws_dev);
-	tasklet_init(&hws_dev->dpc_audio_tasklet[2], DpcForIsr_Audio2,
-		     (unsigned long)hws_dev);
-	tasklet_init(&hws_dev->dpc_audio_tasklet[3], DpcForIsr_Audio3,
-		     (unsigned long)hws_dev);
+
+	/* ── channel-specific spin-lock on parent dev ──────────────── */
+	spin_lock_init(&pdev->audiolock[ch]);
+
+	/* ── per-channel tasklet for ISR bottom-half ──────────────── */
+	tasklet_init(&pdev->dpc_audio_tasklet[ch],
+		     ch == 0 ? DpcForIsr_Audio0 :
+		     ch == 1 ? DpcForIsr_Audio1 :
+		     ch == 2 ? DpcForIsr_Audio2 :
+		               DpcForIsr_Audio3,
+		     (unsigned long) pdev);
 
 	return 0;
 }
+
 
 
 static struct hws_pcie_dev *hws_alloc_dev_instance(struct pci_dev *pdev)

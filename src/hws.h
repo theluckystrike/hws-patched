@@ -380,6 +380,8 @@ struct hws_audio {
 	int						 channel_index;		/* 0 … MAX_VID_CHANNELS-1 */
 	int						 buffer_position;	/* current head (bytes)  */
 
+	struct acap_audio_info	 chan_info;			/* HW-specific metadata  */
+
 	/* ───── DMA audio-buffer bookkeeping ───── */
 	dma_addr_t				 buf_phys_addr;		/* physical DMA address  */
 	u8						*buf_virt;			/* CPU-mapped pointer    */
