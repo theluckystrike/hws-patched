@@ -299,7 +299,6 @@ struct hws_video {
 	struct v4l2_ctrl_handler control_handler;
 	struct v4l2_ctrl		*detect_tx_5v_control;
 	struct v4l2_ctrl		*hotplug_detect_control;
-	struct v4l2_ctrl		*content_type_control;
 
 	/* ───── DMA video-buffer bookkeeping ───── */
 	dma_addr_t				 buf_phys_addr;		/* physical DMA address */

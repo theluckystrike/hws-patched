@@ -329,99 +329,109 @@ void hws_remove(struct pci_dev *pdev)
 
 /* ─────────────────────────────────────────────────────────── */
 /* Per-video-channel initialisation                            */
-
+/* ------------------------------------------------------------------ */
+/*  Initialise one video channel                                      */
+/* ------------------------------------------------------------------ */
 static int hws_video_init_channel(struct hws_pcie_dev *pdev, int ch)
 {
-	struct hws_video              *vid  = &pdev->video[ch];
-	struct v4l2_ctrl_handler      *hdl  = &vid->control_handler;
-	int                            q;
+	struct hws_video         *vid = &pdev->video[ch];
+	struct v4l2_ctrl_handler *hdl = &vid->control_handler;
+	int                       q;
 
-	/* ── zero and basic identity ─────────────────────────── */
+	/* ── hard-reset the whole per-channel struct ─────────────────── */
 	memset(vid, 0, sizeof(*vid));
-	vid->parent         = pdev;
-	vid->channel_index  = ch;
-	vid->query_index    = 0;
-	vid->tv_standard    = V4L2_STD_NTSC_M;
-	vid->pixel_format   = V4L2_PIX_FMT_YUYV;
-	vid->output_width   = 1920;
-	vid->output_height  = 1080;
+
+	/* ── basic identity / defaults ───────────────────────────────── */
+	vid->parent              = pdev;
+	vid->channel_index       = ch;
+	vid->query_index         = 0;
+
+	/* default incoming signal info */
+	vid->tv_standard         = V4L2_STD_NTSC_M;
+	vid->pixel_format        = V4L2_PIX_FMT_YUYV;
+
+	/* default outgoing (scaled) geometry */
+	vid->output_width        = 1920;
+	vid->output_height       = 1080;
 	vid->output_frame_rate   = 60;
 	vid->output_pixel_format = V4L2_PIX_FMT_YUYV;
 	vid->output_size_index   = 0;
+
+	/* colour controls : mid-range baseline (0x80) */
 	vid->current_brightness  =
 	vid->current_contrast    =
 	vid->current_saturation  =
-	vid->current_hue         = 0x80;     /* mid-range defaults */
+	vid->current_hue         = 0x80;
 
-	/* ── locking & async helpers ─────────────────────────── */
+	/* ── kernel synchronisation primitives ───────────────────────── */
 	mutex_init(&vid->state_lock);
 	mutex_init(&vid->capture_queue_lock);
 	spin_lock_init(&vid->irq_lock);
-	INIT_WORK(&vid->video_work, hws_video_work_fn);
+
 	INIT_LIST_HEAD(&vid->capture_queue);
+	INIT_WORK(&vid->video_work, hws_video_work_fn);   /* your worker */
 
-	/* ── V4L2 control handler (detect-5 V + IT-content) ─── */
-	v4l2_ctrl_handler_init(hdl, 2);
+	/* ── DMA bookkeeping is “empty” for now ─────────────────────── */
+	vid->buf_phys_addr   = 0;
+	vid->buf_virt        = NULL;
+	vid->buf_size_bytes  = 0;
+	vid->buf_high_wmark  = 0;
 
-	vid->detect_tx_5v_control = v4l2_ctrl_new_std(
-		hdl, &hws_ctrl_ops,
-		V4L2_CID_DV_RX_POWER_PRESENT, 0, 1, 1, 0);
+	/* ── capture-queue / VCAP status defaults ───────────────────── */
+	for (q = 0; q < MAX_VIDEO_QUEUE; q++) {
+		/* HW status mirror */
+		vid->queue_status[q].byLock       = MEM_UNLOCK;
+		vid->queue_status[q].byField      = 0;
+		vid->queue_status[q].byPath       = 2;
+		vid->queue_status[q].dwWidth      = 1920;
+		vid->queue_status[q].dwHeight     = 1080;
+		vid->queue_status[q].dwinterlace  = 0;
+		vid->queue_status[q].dwFrameRate  = 60;
+		vid->queue_status[q].dwOutWidth   = 1920;
+		vid->queue_status[q].dwOutHeight  = 1080;
+
+		/* software helper struct (acap_video_info) */
+		vid->chan_info.status[q].lock     = MEM_UNLOCK;
+		vid->chan_info.video_buf[q]       = NULL;
+	}
+
+	/* ── per-channel runtime flags / counters ───────────────────── */
+	vid->cap_active       = false;
+	vid->dma_busy         = 0;
+	vid->stop_requested   = false;
+	vid->rd_idx           = 0;
+	vid->wr_idx           = 0;
+	vid->half_done_cnt    = 0;
+	vid->irq_event        = 0;
+	vid->irq_done_flag    = false;
+
+	vid->signal_loss_cnt  = 0;
+	vid->sw_fps           = 0;
+	vid->sequence_number  = 0;
+
+	/* ── V4L2 control handler (optional but mirrors old code) ───── */
+	v4l2_ctrl_handler_init(hdl, 1);
+
+	vid->detect_tx_5v_control = v4l2_ctrl_new_std(hdl, &hws_ctrl_ops,
+					V4L2_CID_DV_RX_POWER_PRESENT,
+					0, 1, 1, 0);
 	if (vid->detect_tx_5v_control)
 		vid->detect_tx_5v_control->flags |=
 			V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_READ_ONLY;
 
-	vid->content_type_control = v4l2_ctrl_new_std(
-		hdl, &hws_ctrl_ops,
-		V4L2_CID_DV_RX_IT_CONTENT_TYPE,
-		V4L2_DV_IT_CONTENT_TYPE_NO_ITC,
-		V4L2_DV_IT_CONTENT_TYPE_GRAPHICS, 1,
-		V4L2_DV_IT_CONTENT_TYPE_NO_ITC);
-	if (vid->content_type_control)
-		vid->content_type_control->flags |=
-			V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_READ_ONLY;
-
 	if (hdl->error) {
 		dev_err(&pdev->pdev->dev,
-			"V4L2 ctrl init failed on ch %d: %d\n",
+			"V4L2 ctrl init failed on ch%d: %d\n",
 			ch, hdl->error);
 		return hdl->error;
 	}
 
-	/* ── per-queue status defaults ───────────────────────── */
-	for (q = 0; q < MAX_VIDEO_QUEUE; q++) {
-		vid->info.status[q].lock       = MEM_UNLOCK;
-		vid->vcap_status[q].byLock     = MEM_UNLOCK;
-		vid->vcap_status[q].byField    = 0;
-		vid->vcap_status[q].byPath     = 2;
-		vid->vcap_status[q].dwWidth    = 1920;
-		vid->vcap_status[q].dwHeight   = 1080;
-		vid->vcap_status[q].dwinterlace= 0;
-		vid->vcap_status[q].dwFrameRate= 60;
-		vid->vcap_status[q].dwOutWidth = 1920;
-		vid->vcap_status[q].dwOutHeight= 1080;
-		vid->info.video_buf[q]         = NULL;
-	}
+	/* ── per-channel locks kept in the parent dev ──────────────── */
+	spin_lock_init(&pdev->videoslock[ch]);
 
-	/* ── runtime flags ───────────────────────────────────── */
-	vid->busy           = false;
-	vid->stop           = false;
-	vid->int_done       = false;
-	vid->sequence_number= 0;
-
-	//---------------------
-	tasklet_init(&hws_dev->dpc_video_tasklet[0], DpcForIsr_Video0,
-		     (unsigned long)hws_dev);
-	tasklet_init(&hws_dev->dpc_video_tasklet[1], DpcForIsr_Video1,
-		     (unsigned long)hws_dev);
-	tasklet_init(&hws_dev->dpc_video_tasklet[2], DpcForIsr_Video2,
-		     (unsigned long)hws_dev);
-	tasklet_init(&hws_dev->dpc_video_tasklet[3], DpcForIsr_Video3,
-		     (unsigned long)hws_dev);
-
-
-	//----------------------
 	return 0;
 }
+
 
 /* ─────────────────────────────────────────────────────────── */
 /* Per-audio-channel initialisation                            */
