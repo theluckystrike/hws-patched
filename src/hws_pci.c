@@ -203,26 +203,6 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
         if (ret)
             goto err_cleanup;
     }
-	//---------------------
-	tasklet_init(&hws_dev->dpc_video_tasklet[0], DpcForIsr_Video0,
-		     (unsigned long)hws_dev);
-	tasklet_init(&hws_dev->dpc_video_tasklet[1], DpcForIsr_Video1,
-		     (unsigned long)hws_dev);
-	tasklet_init(&hws_dev->dpc_video_tasklet[2], DpcForIsr_Video2,
-		     (unsigned long)hws_dev);
-	tasklet_init(&hws_dev->dpc_video_tasklet[3], DpcForIsr_Video3,
-		     (unsigned long)hws_dev);
-
-	tasklet_init(&hws_dev->dpc_audio_tasklet[0], DpcForIsr_Audio0,
-		     (unsigned long)hws_dev);
-	tasklet_init(&hws_dev->dpc_audio_tasklet[1], DpcForIsr_Audio1,
-		     (unsigned long)hws_dev);
-	tasklet_init(&hws_dev->dpc_audio_tasklet[2], DpcForIsr_Audio2,
-		     (unsigned long)hws_dev);
-	tasklet_init(&hws_dev->dpc_audio_tasklet[3], DpcForIsr_Audio3,
-		     (unsigned long)hws_dev);
-
-	//----------------------
 	ret = dma_mem_alloc_pool(hws_dev);
 	if (ret != 0) {
 		goto err_mem_alloc;
@@ -428,6 +408,18 @@ static int hws_video_init_channel(struct hws_pcie_dev *pdev, int ch)
 	vid->int_done       = false;
 	vid->sequence_number= 0;
 
+	//---------------------
+	tasklet_init(&hws_dev->dpc_video_tasklet[0], DpcForIsr_Video0,
+		     (unsigned long)hws_dev);
+	tasklet_init(&hws_dev->dpc_video_tasklet[1], DpcForIsr_Video1,
+		     (unsigned long)hws_dev);
+	tasklet_init(&hws_dev->dpc_video_tasklet[2], DpcForIsr_Video2,
+		     (unsigned long)hws_dev);
+	tasklet_init(&hws_dev->dpc_video_tasklet[3], DpcForIsr_Video3,
+		     (unsigned long)hws_dev);
+
+
+	//----------------------
 	return 0;
 }
 
@@ -474,6 +466,14 @@ static int hws_audio_init_channel(struct hws_pcie_dev *pdev, int ch)
 		pdev->audio_info[ch].status[q].lock = MEM_UNLOCK;
 		pdev->audio_info[ch].audio_buf[q]   = NULL;
 	}
+	tasklet_init(&hws_dev->dpc_audio_tasklet[0], DpcForIsr_Audio0,
+		     (unsigned long)hws_dev);
+	tasklet_init(&hws_dev->dpc_audio_tasklet[1], DpcForIsr_Audio1,
+		     (unsigned long)hws_dev);
+	tasklet_init(&hws_dev->dpc_audio_tasklet[2], DpcForIsr_Audio2,
+		     (unsigned long)hws_dev);
+	tasklet_init(&hws_dev->dpc_audio_tasklet[3], DpcForIsr_Audio3,
+		     (unsigned long)hws_dev);
 
 	return 0;
 }
