@@ -100,12 +100,15 @@ struct vcap_status {
 	u32 path;
 	u32 width;
 	u32 height;
+
+	// FIXME: not in original?
 	u32 fps;
 	u32 out_width;
 	u32 out_height;
 	u32 out_fps;
 	u32 interlace;
 	u32 hdcp;
+	// FIXME: not in original?
 };
 
 struct acap_video_info

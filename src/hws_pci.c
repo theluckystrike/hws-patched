@@ -369,6 +369,7 @@ static int hws_video_init_channel(struct hws_pcie_dev *pdev, int ch)
 	spin_lock_init(&vid->irq_lock);
 
 	INIT_LIST_HEAD(&vid->capture_queue);
+	// FIXME
 	INIT_WORK(&vid->video_work, hws_video_work_fn);   /* your worker */
 
 	/* ── DMA bookkeeping is “empty” for now ─────────────────────── */
@@ -380,15 +381,21 @@ static int hws_video_init_channel(struct hws_pcie_dev *pdev, int ch)
 	/* ── capture-queue / VCAP status defaults ───────────────────── */
 	for (q = 0; q < MAX_VIDEO_QUEUE; q++) {
 		/* HW status mirror */
-		vid->queue_status[q].byLock       = MEM_UNLOCK;
-		vid->queue_status[q].byField      = 0;
-		vid->queue_status[q].byPath       = 2;
-		vid->queue_status[q].dwWidth      = 1920;
-		vid->queue_status[q].dwHeight     = 1080;
-		vid->queue_status[q].dwinterlace  = 0;
-		vid->queue_status[q].dwFrameRate  = 60;
-		vid->queue_status[q].dwOutWidth   = 1920;
-		vid->queue_status[q].dwOutHeight  = 1080;
+		vid->queue_status[q].lock       = MEM_UNLOCK;
+		// vid->queue_status[q].channel    = ;
+		// vid->queue_status[q].size       = ;
+		vid->queue_status[q].field      = 0;
+		vid->queue_status[q].path       = 2;
+		vid->queue_status[q].width      = 1920;
+		vid->queue_status[q].height     = 1080;
+		vid->queue_status[q].interlace  = 0;
+
+		// FIXME: not in original?
+		vid->queue_status[q].fps        = 60;
+		vid->queue_status[q].out_width  = 1920;
+		vid->queue_status[q].out_height = 1080;
+		// vid->queue_status[q].hdcp       = ;
+		// FIXME: not in original?
 
 		/* software helper struct (acap_video_info) */
 		vid->chan_info.status[q].lock     = MEM_UNLOCK;
@@ -454,6 +461,8 @@ static int hws_audio_init_channel(struct hws_pcie_dev *pdev, int ch)
 
 	/* ── synchronisation primitives / workers ──────────────────── */
 	spin_lock_init(&aud->ring_lock);
+
+	// FIXME
 	INIT_WORK(&aud->audio_work, hws_audio_work_fn);
 
 	/* ── ring-buffer bookkeeping defaults ──────────────────────── */
@@ -473,13 +482,13 @@ static int hws_audio_init_channel(struct hws_pcie_dev *pdev, int ch)
 	aud->buf_high_wmark  = 0;
 
 	/* ── capture-state flags ───────────────────────────────────── */
-	aud->cap_active      = false;   /* was m_bACapStarted */
-	aud->dma_busy        = 0;       /* was m_nAudioBusy   */
-	aud->stream_running  = false;   /* was m_bAudioRun    */
-	aud->stop_requested  = false;   /* was m_bAudioStop   */
-	aud->wr_idx          = 0;       /* was m_nAudioBufferIndex */
-	aud->rd_idx          = 0;       /* was m_nRDAudioIndex     */
-	aud->irq_event       = 0;       /* was m_pAudioEvent       */
+	aud->cap_active      = false;
+	aud->dma_busy        = 0;
+	aud->stream_running  = false;
+	aud->stop_requested  = false;
+	aud->wr_idx          = 0;
+	aud->rd_idx          = 0;
+	aud->irq_event       = 0;
 
 	/* ── resampling workspace cleared ──────────────────────────── */
 	aud->resampled_buffer      = NULL;
