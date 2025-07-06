@@ -220,60 +220,90 @@ struct hws_dmabuf{
 | `ctrl_handler`        | `control_handler`    | expands abbreviation                                    |
 | `*_ctrl` pointers     | `*_control`          | ditto; replaces `hpd` with `hotplug_detect`             |
 */
-
+/* ───────────────────────────────────────────────────────────────────── */
+/*  Per-channel VIDEO state                                             */
+/* ───────────────────────────────────────────────────────────────────── */
 struct hws_video {
 	/* ───── linkage ───── */
-	struct hws_pcie_dev     *parent;              /* parent device */
+	struct hws_pcie_dev		*parent;		/* parent device */
 
 	/* ───── V4L2 framework objects ───── */
-	struct v4l2_device       v4l2_device;
-	struct video_device      video_device;
-	struct vb2_queue         buffer_queue;
-	struct list_head         capture_queue;
+	struct v4l2_device		 v4l2_device;
+	struct video_device		 video_device;
+	struct vb2_queue			 buffer_queue;
+	struct list_head			 capture_queue;
 
 	/* ───── file & stream bookkeeping ───── */
-	int                      file_index;
-	int                      stream_start_index;
-	unsigned int             sequence_number;
+	int					 	 file_index;
+	int			 			 stream_start_index;
+	unsigned int			 sequence_number;
 
 	/* ───── locking ───── */
-	struct mutex             state_lock;          /* primary state */
-	struct mutex             capture_queue_lock;  /* list_head guard */
-	spinlock_t               irq_lock;            /* ISR-side */
+	struct mutex			 state_lock;		  /* primary state */
+	struct mutex			 capture_queue_lock; /* list_head guard */
+	spinlock_t				 irq_lock;			  /* ISR-side */
 
 	/* ───── format / standard ───── */
-	v4l2_std_id              tv_standard;         /* e.g. V4L2_STD_NTSC_M */
-	u32                      pixel_format;        /* e.g. V4L2_PIX_FMT_YUYV */
+	v4l2_std_id				 tv_standard;		  /* e.g. V4L2_STD_NTSC_M */
+	u32						 pixel_format;		  /* e.g. V4L2_PIX_FMT_YUYV */
 
 	/* ───── indices ───── */
-	int                      query_index;
-	int                      channel_index;
+	int						 query_index;
+	int						 channel_index;
 
 	/* ───── async helpers ───── */
-	struct work_struct       video_work;
+	struct work_struct		 video_work;
 
 	/* ───── misc flags ───── */
-	bool                     interlaced;
+	bool					 interlaced;
 
 	/* ───── colour controls ───── */
-	int                      current_brightness;
-	int                      current_contrast;
-	int                      current_saturation;
-	int                      current_hue;
+	int						 current_brightness;
+	int						 current_contrast;
+	int						 current_saturation;
+	int						 current_hue;
 
 	/* ───── active output configuration ───── */
-	int                      output_width;
-	int                      output_height;
-	int                      output_frame_rate;
-	int                      output_pixel_format;
-	int                      output_size_index;
+	int						 output_width;
+	int						 output_height;
+	int						 output_frame_rate;
+	int						 output_pixel_format;
+	int						 output_size_index;
 
 	/* ───── V4L2 controls ───── */
 	struct v4l2_ctrl_handler control_handler;
-	struct v4l2_ctrl        *detect_tx_5v_control;
-	struct v4l2_ctrl        *hotplug_detect_control;
-	struct v4l2_ctrl        *content_type_control;
-};	
+	struct v4l2_ctrl		*detect_tx_5v_control;
+	struct v4l2_ctrl		*hotplug_detect_control;
+	struct v4l2_ctrl		*content_type_control;
+
+	/* ───── DMA video-buffer bookkeeping ───── */
+	dma_addr_t				 buf_phys_addr;		/* physical DMA address */
+	u8						*buf_virt;			/* CPU-mapped pointer    */
+	u32						 buf_size_bytes;	/* total buffer size     */
+	u32						 buf_high_wmark;	/* high-watermark thresh */
+
+	/* ───── capture queue status ───── */
+	struct vcap_status		 queue_status[MAX_VIDEO_QUEUE];
+	struct acap_video_info	 chan_info;			/* HW-specific metadata  */
+	struct hws_video_fmt	 fmt_curr;			/* current format        */
+	bool					 size_changed_flag; /* resolution switch     */
+
+	/* ───── per-channel capture state ───── */
+	bool					 cap_active;		/* was vcap_started      */
+	u8						 dma_busy;			/* was video_busy        */
+	bool					 stop_requested;	/* was video_stop        */
+	int						 rd_idx;			/* read pointer          */
+	int						 wr_idx;			/* write pointer         */
+	int						 half_done_cnt;		/* half-buffer IRQ count */
+	u8						 irq_event;			/* last IRQ event code   */
+	bool					 irq_done_flag;		/* irq handler finished  */
+
+	/* ───── misc counters ───── */
+	int						 signal_loss_cnt;	/* no-video counter      */
+	int						 sw_fps;			/* software frame rate   */
+};
+
+
 
 /*
 | Old name               | New name                    | Reasoning                                         |
@@ -298,38 +328,58 @@ struct hws_video {
 | `bits_per_sample`      | *unchanged* (already clear) | —                                                 |
 
  */
+/* ───────────────────────────────────────────────────────────────────── */
+/*  Per-channel AUDIO state                                             */
+/* ───────────────────────────────────────────────────────────────────── */
 struct hws_audio {
 	/* ───── linkage ───── */
-	struct hws_pcie_dev        *parent;             /* back-pointer */
+	struct hws_pcie_dev		*parent;			/* back-pointer */
 
 	/* ───── ALSA objects ───── */
-	struct snd_card            *sound_card;         /* returned by snd_card_new() */
-	struct snd_pcm_substream   *pcm_substream;
+	struct snd_card			*sound_card;		/* from snd_card_new()   */
+	struct snd_pcm_substream *pcm_substream;
 
 	/* ───── async helper ───── */
-	struct work_struct          audio_work;
+	struct work_struct		 audio_work;
 
 	/* ───── indexing & position ───── */
-	int                         channel_index;      /* 0 … MAX_VID_CHANNELS-1 */
-	int                         buffer_position;    /* current play/capture head */
+	int						 channel_index;		/* 0 … MAX_VID_CHANNELS-1 */
+	int						 buffer_position;	/* current head (bytes)  */
+
+	/* ───── DMA audio-buffer bookkeeping ───── */
+	dma_addr_t				 buf_phys_addr;		/* physical DMA address  */
+	u8						*buf_virt;			/* CPU-mapped pointer    */
+	u8						*data_buf;			/* raw PCM payload       */
+	u8						*data_area;			/* ALSA channel area ptr */
+	u32						 buf_size_bytes;	/* total buffer size     */
+	u32						 buf_high_wmark;	/* high-watermark thresh */
+
+	/* ───── per-channel capture state ───── */
+	bool					 cap_active;		/* was acap_started      */
+	u8						 dma_busy;			/* was audio_busy        */
+	u8						 wr_idx;			/* write index           */
+	int						 rd_idx;			/* read  index           */
+	u8						 irq_event;			/* last IRQ event code   */
+	bool					 stream_running;	/* was audio_running     */
+	bool					 stop_requested;	/* was audio_stop        */
 
 	/* ───── ring-buffer layout ───── */
-	int                         ring_offset_bytes;      /* DMA start offset     */
-	int                         ring_overflow_bytes;    /* overrun protection   */
-	spinlock_t                  ring_lock;              /* guards fields below  */
-	u32                         ring_write_pos_frames;  /* write pointer (frames) */
-	u32                         ring_size_frames;       /* total size (frames)     */
-	u32                         period_size_frames;     /* ALSA period size        */
-	u32                         period_used_frames;     /* frames consumed so far  */
+	int						 ring_offset_bytes;		/* DMA start offset     */
+	int						 ring_overflow_bytes;	/* overrun protection   */
+	spinlock_t				 ring_lock;				/* guards fields below  */
+	u32						 ring_write_pos_frames;	/* write ptr (frames)   */
+	u32						 ring_size_frames;		/* total size (frames)  */
+	u32						 period_size_frames;	/* ALSA period size     */
+	u32						 period_used_frames;	/* frames consumed      */
 
 	/* ───── resampling workspace ───── */
-	void                       *resampled_buffer;
-	u32                         resampled_buffer_size;
+	void					 *resampled_buffer;
+	u32						 resampled_buffer_size;
 
 	/* ───── PCM format ───── */
-	u32                         output_sample_rate; /* Hz */
-	u16                         channel_count;      /* 1 = mono, 2 = stereo … */
-	u16                         bits_per_sample;    /* 16, 24, 32 …           */
+	u32						 output_sample_rate;	/* Hz                   */
+	u16						 channel_count;		/* 1 = mono, 2 = stereo */
+	u16						 bits_per_sample;	/* 16, 24, 32 …         */
 };
 	
 /*
