@@ -88,31 +88,30 @@ int CheckVideoCapture(struct hws_pcie_dev *pdx, int index)
 	return enable;
 }
 
-void EnableVideoCapture(struct hws_pcie_dev *pdx, int index, int en)
+void hws_enable_video_capture(struct hws_pcie_dev *hws,
+                                     unsigned int chan,
+                                     bool on)
 {
-	ULONG status;
-	int enable;
-	if (pdx->m_PciDeviceLost)
-		return;
-	status = READ_REGISTER_ULONG(pdx, HWS_REG_VCAP_ENABLE);
-	if (en) {
-		enable = 1;
-		enable = enable << index;
-		status = status | enable;
-	} else {
-		enable = 1;
-		enable = enable << index;
-		enable = ~enable;
-		status = status & enable;
-	}
-	pdx->m_bVCapStarted[index] = en;
-	WRITE_REGISTER_ULONG(pdx, HWS_REG_VCAP_ENABLE, status);
-	/* Optional: re‐read to verify 
-     * status = READ_REGISTER_ULONG(pdx, HWS_REG_VCAP_ENABLE);
-     * printk("EnableVideoCapture[%d] = 0x%08X (started=%d)\n", 
-     *        index, status, pdx->m_bVCapStarted[index]);
-     */
+    u32 status;
+
+    /* bail if the PCI device is lost or chan out of range */
+    if (hws->pci_lost || chan >= hws->max_channels)
+        return;
+
+    /* read-modify-write the bitmask register */
+    status = hws_read32(hws, HWS_REG_VCAP_ENABLE);
+    if (on)
+        status |= BIT(chan);
+    else
+        status &= ~BIT(chan);
+
+    /* track state in our per-channel struct */
+    hws->video[chan].cap_active = on;
+
+    /* write it back */
+    hws_write32(hws, HWS_REG_VCAP_ENABLE, status);
 }
+
 
 int StartVideoCapture(struct hws_pcie_dev *pdx, int index)
 {
@@ -121,7 +120,7 @@ int StartVideoCapture(struct hws_pcie_dev *pdx, int index)
 	if (pdx->m_bVCapStarted[index] == 1) {
 		CheckCardStatus(pdx);
 		if (CheckVideoCapture(pdx, index) == 0) {
-			EnableVideoCapture(pdx, index, 1);
+			hws_enable_video_capture(pdx, index, true);
 		}
 		return -1;
 	}
@@ -144,7 +143,7 @@ int StartVideoCapture(struct hws_pcie_dev *pdx, int index)
 	pdx->m_pVideoEvent[index] = 1;
 	pdx->m_nVideoBusy[index] = 0;
 	pdx->video_data[index] = 0;
-	EnableVideoCapture(pdx, index, 1);
+	hws_enable_video_capture(pdx, index, true);
 	return 0;
 }
 
@@ -174,7 +173,7 @@ void StopVideoCapture(struct hws_pcie_dev *pdx, int index)
 		msleep(10);
 	}
 #endif
-	EnableVideoCapture(pdx, index, 0);
+	hws_enable_video_capture(pdx, index, false);
 	pdx->m_bVCapIntDone[index] = 0;
 }
 
@@ -222,44 +221,52 @@ void CheckVideoFmt(struct hws_pcie_dev *pdx)
 	}
 }
 
-void InitVideoSys(struct hws_pcie_dev *pdx, int set)
+void init_video_sys(struct hws_pcie_dev *hws, bool enable)
 {
-	// init decoder
-	int i, j;
-	//	DWORD dwRest=0;
-	DWORD m_Valude;
+    int i, j;
 
-	/* If we’ve already started running and set==0, do nothing. */
-	if (pdx->m_bStartRun && (set == 0))
-		return;
+    /* If already running and we're not resetting, nothing to do */
+    if (hws->start_run && !enable)
+        return;
 
-	WRITE_REGISTER_ULONG(pdx, HWS_REG_DEC_MODE, 0x00);
-	SetDMAAddress(pdx);
-	if (set == 0) {
-		for (i = 0; i < pdx->m_nMaxChl; i++) {
-			for (j = 0; j < MAX_VIDEO_QUEUE; j++) {
-				pdx->m_pVCAPStatus[i][j].byLock = MEM_UNLOCK;
-				pdx->m_pVCAPStatus[i][j].byPath = 2;
-				pdx->m_pVCAPStatus[i][j].byField = 0;
-				pdx->m_pVCAPStatus[i][j].dwinterlace = 0;
-			}
-			//pdx->m_nVideoIndex[i] =0;
-			pdx->m_nAudioBufferIndex[i] = 0;
-			EnableVideoCapture(pdx, i, 0);
-			EnableAudioCapture(pdx, i, 0);
-		}
-	}
+    /* 1) reset the decoder mode register to 0 */
+    hws_write32(hws, HWS_REG_DEC_MODE, 0x00000000);
 
-	WRITE_REGISTER_ULONG(pdx, INT_EN_REG_BASE, 0x3ffff);
-	/* ── 5.  “Start run”: set bit 31 of decoder/register, then clear lower 24 bits ── */
-	WRITE_REGISTER_ULONG(pdx, HWS_REG_DEC_MODE, 0x80000000);
-	//DelayUs(500);
-	m_Valude = 0x00FFFFFF;
-	m_Valude |= 0x80000000;
-	WRITE_REGISTER_ULONG(pdx, HWS_REG_DEC_MODE, m_Valude);
-	WRITE_REGISTER_ULONG(pdx, HWS_REG_DEC_MODE, 0X13);
-	pdx->m_bStartRun = 1;
-	//--------------------------------------------------
+    /* 2) point DMA pointers at our buffers */
+    hws_set_dma_address(hws);
+
+    /* 3) on a full reset, clear all per-channel status and indices */
+    if (!enable) {
+        for (i = 0; i < hws->max_channels; i++) {
+            struct vcap_status *vs = hws->video[i].queue_status;
+
+            for (j = 0; j < MAX_VIDEO_QUEUE; j++) {
+                vs[j].lock      = MEM_UNLOCK;
+                vs[j].path      = 2;
+                vs[j].field     = 0;
+                vs[j].interlace = 0;
+            }
+
+            /* reset audio write pointer */
+            hws->audio[i].wr_idx = 0;
+
+            /* helpers to arm/disable capture engines */
+            hws_enable_video_capture(hws, i, false);
+            EnableAudioCapture(hws, i, 0);
+        }
+    }
+
+    /* 4) enable all interrupts */
+    hws_write32(hws, INT_EN_REG_BASE, 0x003FFFFF);
+
+    /* 5) “Start run”: set bit31, wait a bit, then program low 24 bits */
+    hws_write32(hws, HWS_REG_DEC_MODE, 0x80000000);
+    udelay(500);
+    hws_write32(hws, HWS_REG_DEC_MODE, 0x80FFFFFF);
+    hws_write32(hws, HWS_REG_DEC_MODE, 0x00000013);
+
+    /* 6) record that we're now running */
+    hws->start_run = true;
 }
 
 /* ──────────────────────────────────────────────────────────────── */

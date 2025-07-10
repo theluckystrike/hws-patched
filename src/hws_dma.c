@@ -144,98 +144,46 @@ err:
 	return ret;
 }
 
-void set_dma_address(struct hws_pcie_dev *pdx)
+void hws_set_dma_address(struct hws_pcie_dev *hws)
 {
-	//-------------------------------------
+	u32 addr_mask     = PCI_E_BAR_ADD_MASK;
+	u32 addr_low_mask = PCI_E_BAR_ADD_LOWMASK;
+	u32 table_off     = 0x208;          /* first entry in PCI addr table */
+	int i;
 
-	u32 Addrmsk;
-	u32 AddrLowmsk;
-	//u32 AddrPageSize;
-	//u32 Addr2PageSize;
-	u32 PhyAddr_A_Low;
-	u32 PhyAddr_A_High;
+	for (i = 0; i < hws->max_channels; i++, table_off += 8) {
+		/* ───────────── VIDEO DMA entry ───────────── */
+		if (hws->video[i].buf_virt) {
+			dma_addr_t paddr  = hws->video[i].buf_phys_addr;
+			u32 lo           = lower_32_bits(paddr);
+			u32 hi           = upper_32_bits(paddr);
+			u32 pci_addr     = lo & addr_low_mask;
+			lo              &= addr_mask;
 
-	//u32 PhyAddr_A_Low2;
-	//u32 PhyAddr_A_High2;
-	//u32 PCI_Addr2;
+			/* Program the 64-bit BAR remap entry */
+			hws_write32(hws, PCI_ADDR_TABLE_BASE + table_off,              hi);
+			hws_write32(hws, PCI_ADDR_TABLE_BASE + table_off +
+						PCIE_BARADDROFSIZE,                        lo);
 
-	u32 PCI_Addr;
-	//u32 AVALON_Addr;
-	u32 cnt;
-	//u64 m_tmp64cnt = 0;
-	//u32 RDAvalon = 0;
-	//u32 m_AddreeSpace = 0;
-	int i = 0;
-	u32 m_ReadTmp;
-	u32 m_ReadTmp2;
-	//u32 m_ReadTmp3;
-	//u32 m_ReadTmp4;
-	DWORD halfframe_length = 0;
-	//DWORD m_Valude;
-	PhyAddr_A_High = 0;
-	PhyAddr_A_Low = 0;
-	PCI_Addr = 0;
+			/* CBVS buffer address + half-frame length */
+			hws_write32(hws, CBVS_IN_BUF_BASE  + i * PCIE_BARADDROFSIZE,
+			            (i + 1) * PCIEBAR_AXI_BASE + pci_addr);
 
-	//------------------------------------------ // re write dma register
-
-	Addrmsk = PCI_E_BAR_ADD_MASK;
-	AddrLowmsk = PCI_E_BAR_ADD_LOWMASK;
-
-	cnt = 0x208; // Table address
-	for (i = 0; i < pdx->m_nMaxChl; i++) {
-		//printk("[MV] pdx->m_pbyVideoBuffer[%d]=%x\n", i, pdx->m_pbyVideoBuffer[i]);
-		if (pdx->m_pbyVideoBuffer[i]) {
-			PhyAddr_A_Low = pdx->m_dwVideoBuffer[i];
-			PhyAddr_A_High = pdx->m_dwVideoHighBuffer[i];
-
-			PCI_Addr = (PhyAddr_A_Low & AddrLowmsk);
-			PhyAddr_A_Low = (PhyAddr_A_Low & Addrmsk);
-
-			//printk("[MV]1-pdx->m_dwVideoBuffer[%d]-%X\n",i,pdx->m_dwVideoBuffer[i]);
-			//--------------------------------------------------------------
-			WRITE_REGISTER_ULONG(pdx, (PCI_ADDR_TABLE_BASE + cnt),
-					     PhyAddr_A_High);
-			WRITE_REGISTER_ULONG(pdx,
-					     (PCI_ADDR_TABLE_BASE + cnt +
-					      PCIE_BARADDROFSIZE),
-					     PhyAddr_A_Low); //Entry 0
-			//----------------------------------------
-			m_ReadTmp = READ_REGISTER_ULONG(
-				pdx, (PCI_ADDR_TABLE_BASE + cnt));
-			m_ReadTmp2 = READ_REGISTER_ULONG(
-				pdx, (PCI_ADDR_TABLE_BASE + cnt +
-				      PCIE_BARADDROFSIZE));
-
-			//--------------------------
-			WRITE_REGISTER_ULONG(pdx, (CBVS_IN_BUF_BASE + (i * PCIE_BARADDROFSIZE)),
-					     ((i + 1) * PCIEBAR_AXI_BASE) +
-					PCI_Addr); //Buffer 1 address
-			halfframe_length = pdx->m_format[i].HLAF_SIZE / 16;
-			WRITE_REGISTER_ULONG(pdx,
-                    (CBVS_IN_BUF_BASE2 + (i * PCIE_BARADDROFSIZE)),
-					     halfframe_length); //Buffer 1 address
-
-			m_ReadTmp = READ_REGISTER_ULONG(pdx, (CBVS_IN_BUF_BASE + (i * PCIE_BARADDROFSIZE)));
-			m_ReadTmp2 = READ_REGISTER_ULONG(pdx, (CBVS_IN_BUF_BASE2 + (i * PCIE_BARADDROFSIZE)));
-
-			//---------------------------
+			hws_write32(hws, CBVS_IN_BUF_BASE2 + i * PCIE_BARADDROFSIZE,
+			            hws->video[i].fmt_curr.half_size / 16);
 		}
-		cnt += 8;
-		if (pdx->m_pbyAudioBuffer[i]) {
-			PhyAddr_A_Low = pdx->m_dwAudioBuffer[i];
-			PhyAddr_A_High = pdx->m_dwAudioBufferHigh[i];
-			PCI_Addr = (PhyAddr_A_Low & AddrLowmsk);
-			PhyAddr_A_Low = (PhyAddr_A_Low & Addrmsk);
 
-			WRITE_REGISTER_ULONG(pdx,
-					     (CBVS_IN_BUF_BASE +
-					      ((8 + i) * PCIE_BARADDROFSIZE)),
-					     ((i + 1) * PCIEBAR_AXI_BASE +
-					      PCI_Addr)); //Buffer 1 address
-			m_ReadTmp = READ_REGISTER_ULONG(pdx, (CBVS_IN_BUF_BASE +
-				      ((8 + i) * PCIE_BARADDROFSIZE)));
+		/* ───────────── AUDIO tail entry ───────────── */
+		if (hws->audio[i].buf_virt) {
+			dma_addr_t paddr  = hws->audio[i].buf_phys_addr;
+			u32 pci_addr     = lower_32_bits(paddr) & addr_low_mask;
+
+			hws_write32(hws,
+				CBVS_IN_BUF_BASE + (8 + i) * PCIE_BARADDROFSIZE,
+				(i + 1) * PCIEBAR_AXI_BASE + pci_addr);
 		}
 	}
-	WRITE_REGISTER_ULONG(pdx, INT_EN_REG_BASE,
-			     0x3ffff); //enable PCI Interruput
+
+	/* Enable PCIe interrupts for all sources */
+	hws_write32(hws, INT_EN_REG_BASE, 0x003fffff);
 }

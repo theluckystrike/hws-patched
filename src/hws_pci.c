@@ -205,7 +205,7 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
         if (ret)
             goto err_cleanup;
     }
-    	// FIXME: this code is messed up
+
 	ret = dma_mem_alloc_pool(hws_dev);
 	if (ret != 0) {
 		goto err_mem_alloc;
