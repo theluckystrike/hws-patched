@@ -5,14 +5,6 @@
 #include <linux/pci.h>
 #include "hws.h"
 
-/**
- * hws_request_irqs() – allocate and register all IRQs and threaded handlers
- * @dev:    your driver’s private hws_pcie_dev
- * @pdev:   the kernel’s pci_dev pointer
- *
- * Returns 0 on success or a negative errno.
- */
-int hws_request_irqs(struct hws_pcie_dev *dev, struct pci_dev *pdev);
 
 /**
  * hws_free_irqs() – free IRQs and tear down all DPC threads

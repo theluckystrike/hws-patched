@@ -136,6 +136,7 @@ static int read_chip_id(struct hws_pcie_dev *pdx)
 
 int hws_video_init_channel(struct hws_pcie_dev *dev, int idx);
 int hws_audio_init_channel(struct hws_pcie_dev *dev, int idx);
+int hws_irq_setup(struct hws_pcie_dev *hws);
 
 static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id)
 {
@@ -618,6 +619,54 @@ static int probe_scan_for_msi(struct hws_pcie_dev *hws, struct pci_dev *pdev)
     hws->msi_enabled  = false;
     hws->msix_enabled = false;
     dev_info(&pdev->dev, "using legacy INTx interrupts\n");
+    return 0;
+}
+
+static int hws_irq_setup(struct hws_pcie_dev *hws)
+{
+    struct pci_dev *pdev = hws->pdev;
+    int irq, rc;
+    unsigned long flags = 0;
+
+    if (WARN_ON(!hws || !pdev))
+        return -EINVAL;
+
+    /*
+     * If neither MSI nor MSI-X got enabled in probe(), we’re stuck on
+     * legacy INTx—mark it shared and log the pin/line.
+     */
+    if (!hws->msi_enabled && !hws->msix_enabled) {
+        u8 pin;
+
+        pci_read_config_byte(pdev, PCI_INTERRUPT_PIN, &pin);
+        dev_info(&pdev->dev,
+                 "no MSI/MSI-X; using legacy INTx (pin %u, line %d)\n",
+                 pin, pdev->irq);
+        flags |= IRQF_SHARED;
+    }
+
+    /* Get the vector we allocated in probe_scan_for_msi() */
+    irq = pci_irq_vector(pdev, 0);
+    if (irq < 0) {
+        dev_err(&pdev->dev,
+                "pci_irq_vector() failed: %d\n", irq);
+        return irq;
+    }
+
+    /* Managed IRQ — we don’t need an explicit free_irq() on error/remove */
+    rc = devm_request_irq(&pdev->dev, irq, irqhandler,
+                          flags, dev_name(&pdev->dev), hws);
+    if (rc) {
+        dev_err(&pdev->dev,
+                "devm_request_irq(%d) failed: %d\n", irq, rc);
+        return rc;
+    }
+
+    hws->irq_line = irq;
+    dev_info(&pdev->dev,
+             "IRQ %d registered (msi=%u)\n",
+             irq, hws->msi_enabled);
+
     return 0;
 }
 
