@@ -178,7 +178,6 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
 	enable_pcie_relaxed_ordering(pci_dev);
 	pci_set_master(pci_dev);
 
-	// TODO: cleanup comments, check deprecation
 	ret = probe_scan_for_msi(hws_dev, pci_dev);
 
 	if (ret < 0)
@@ -191,7 +190,6 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
 	hws_dev->video_wq = NULL;
 	hws_dev->audio_w = NULL;
 
-	// TODO: comment cleanup, new vars
 	ret = hws_irq_setup(hws_dev, pci_dev);
 	if (ret)
 		goto err_register;
