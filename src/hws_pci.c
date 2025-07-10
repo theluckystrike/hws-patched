@@ -215,6 +215,7 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
 	InitVideoSys(hws_dev, 0);
 	StartKSThread(hws_dev);
 
+	// NOTE: loops around `hws_get_video_param`, which sets values based on vcap status height/width
 	hws_adapters_init(hws_dev);
 	hws_dev->wq = create_singlethread_workqueue("hws");
 	hws_dev->auwq = create_singlethread_workqueue("hws-audio");
@@ -575,45 +576,51 @@ int msi_msix_capable(struct pci_dev *dev, int type)
 	return 1;
 }
 
-int probe_scan_for_msi(struct hws_pcie_dev *lro, struct pci_dev *pdev)
+static int probe_scan_for_msi(struct hws_pcie_dev *hws, struct pci_dev *pdev)
 {
-	//int i;
-	int rc = 0;
-	//int req_nvec = MAX_NUM_ENGINES + MAX_USER_IRQ;
+    int rc, nvec;
 
-	//BUG_ON(!lro);
-	//BUG_ON(!pdev);
-	//if (msi_msix_capable(pdev, PCI_CAP_ID_MSIX)) {
-	//		printk("Enabling MSI-X\n");
-	//		for (i = 0; i < req_nvec; i++)
-	//			lro->entry[i].entry = i;
-	//
-	//		rc = pci_enable_msix(pdev, lro->entry, req_nvec);
-	//		if (rc < 0)
-	//			printk("Couldn't enable MSI-X mode: rc = %d\n", rc);
+    if (WARN_ON(!hws || !pdev))
+        return -EINVAL;
 
-	//		lro->msix_enabled = 1;
-	//		lro->msi_enabled = 0;
-	//	}
-	//else
+#ifdef CONFIG_PCI_IRQ_VECTOR
+    /* 1) Try to allocate MSI-X vectors */
+    if (pci_find_capability(pdev, PCI_CAP_ID_MSIX)) {
+        nvec = ARRAY_SIZE(hws->msix_entries);
+        rc = pci_alloc_irq_vectors(pdev, nvec, nvec, PCI_IRQ_MSIX);
+        if (rc == nvec) {
+            hws->msix_enabled = true;
+            hws->msi_enabled  = false;
+            dev_info(&pdev->dev, "MSI-X x%d enabled\n", nvec);
+            return 0;
+        }
+        dev_err(&pdev->dev,
+                "MSI-X x%d allocation failed (%d), falling back\n",
+                nvec, rc);
+    }
 
-	if (msi_msix_capable(pdev, PCI_CAP_ID_MSI)) {
-		/* enable message signalled interrupts */
-		//printk("pci_enable_msi()\n");
-		rc = pci_enable_msi(pdev);
-		if (rc < 0) {
-			printk("Couldn't enable MSI mode: rc = %d\n", rc);
-		}
-		lro->msi_enabled = 1;
-		lro->msix_enabled = 0;
-	} else {
-		//printk("MSI/MSI-X not detected - using legacy interrupts\n");
-		lro->msi_enabled = 0;
-		lro->msix_enabled = 0;
-	}
+    /* 2) Try to allocate a single MSI vector */
+    if (pci_find_capability(pdev, PCI_CAP_ID_MSI)) {
+        rc = pci_alloc_irq_vectors(pdev, 1, 1, PCI_IRQ_MSI);
+        if (rc == 1) {
+            hws->msi_enabled  = true;
+            hws->msix_enabled = false;
+            dev_info(&pdev->dev, "MSI x1 enabled\n");
+            return 0;
+        }
+        dev_err(&pdev->dev,
+                "MSI x1 allocation failed (%d), falling back\n",
+                rc);
+    }
+#endif
 
-	return rc;
+    /* 3) Legacy INTx */
+    hws->msi_enabled  = false;
+    hws->msix_enabled = false;
+    dev_info(&pdev->dev, "using legacy INTx interrupts\n");
+    return 0;
 }
+
 
 static inline void hws_write32(struct hws_pcie_dev *hdev, u32 off, u32 val)
 {
