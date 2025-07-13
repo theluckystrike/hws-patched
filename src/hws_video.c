@@ -42,11 +42,9 @@ static int hws_open(struct file *file)
 	struct hws_video *videodev = video_drvdata(file);
 	unsigned long flags;
 	struct hws_pcie_dev *pdx = videodev->dev;
-    // FIXME: no index
-	spin_lock_irqsave(&pdx->videoslock[videodev->index], flags);
+	spin_lock_irqsave(&pdx->videoslock[videodev->channel_index], flags);
 	videodev->file_index++;
-    // FIXME: no index
-	spin_unlock_irqrestore(&pdx->videoslock[videodev->index], flags);
+	spin_unlock_irqrestore(&pdx->videoslock[videodev->channel_index], flags);
 	return 0;
 }
 
@@ -56,18 +54,15 @@ static int hws_release(struct file *file)
 	unsigned long flags;
 	struct hws_pcie_dev *pdx = videodev->dev;
 
-    // FIXME: no index
-	spin_lock_irqsave(&pdx->videoslock[videodev->index], flags);
+	spin_lock_irqsave(&pdx->videoslock[videodev->channel_index], flags);
 	if (videodev->file_index > 0) {
 		videodev->file_index--;
 	}
-    // FIXME: no index
-	spin_unlock_irqrestore(&pdx->videoslock[videodev->index], flags);
+	spin_unlock_irqrestore(&pdx->videoslock[videodev->channel_index], flags);
 
 	if (videodev->file_index == 0) {
 		if (videodev->stream_start_index > 0) {
-            // FIXME: no index
-			StopVideoCapture(videodev->dev, videodev->index);
+			StopVideoCapture(videodev->dev, videodev->channel_index);
 			videodev->stream_start_index = 0;
 		}
 		return (vb2_fop_release(file));
@@ -127,13 +122,11 @@ static int hws_queue_setup(struct vb2_queue *q, unsigned int *num_buffers,
 	struct hws_pcie_dev *pdx = videodev->dev;
 	unsigned long flags;
 	unsigned size;
-    // FIXME: no index
-	spin_lock_irqsave(&pdx->videoslock[videodev->index], flags);
+	spin_lock_irqsave(&pdx->videoslock[videodev->channel_index], flags);
 	size = 2 * videodev->current_out_width *
 	       videodev->curren_out_height; // 16bit
 	if (videodev->file_index > 1) {
-        // FIXME: no index
-		spin_unlock_irqrestore(&pdx->videoslock[videodev->index],
+		spin_unlock_irqrestore(&pdx->videoslock[videodev->channel_index],
 				       flags);
 		return -EINVAL;
 	}
@@ -145,11 +138,11 @@ static int hws_queue_setup(struct vb2_queue *q, unsigned int *num_buffers,
 	if (*num_planes) {
 		if (sizes[0] < size) {
 			spin_unlock_irqrestore(
-				&pdx->videoslock[videodev->index], flags); // FIXME: no index
+				&pdx->videoslock[videodev->channel_index], flags);
 			return -EINVAL;
 		} else {
 			spin_unlock_irqrestore(
-				&pdx->videoslock[videodev->index], flags); // FIXME: no index
+				&pdx->videoslock[videodev->channel_index], flags);
 			return 0;
 		}
 	}
@@ -157,8 +150,7 @@ static int hws_queue_setup(struct vb2_queue *q, unsigned int *num_buffers,
 	//printk( "%s()  sizes[0]= %d size= %d\n", __func__,sizes[0],size);
 	*num_planes = 1;
 	sizes[0] = size;
-    // FIXME: no index
-	spin_unlock_irqrestore(&pdx->videoslock[videodev->index], flags);
+	spin_unlock_irqrestore(&pdx->videoslock[videodev->channel_index], flags);
 	return 0;
 }
 
@@ -172,19 +164,17 @@ static int hws_buffer_prepare(struct vb2_buffer *vb)
 	u32 size;
 	unsigned long flags;
 
-    // FIXME: no index
-	spin_lock_irqsave(&pdx->videoslock[videodev->index], flags);
+	spin_lock_irqsave(&pdx->videoslock[videodev->channel_index], flags);
 	size = 2 * videodev->current_out_width *
 	       videodev->curren_out_height; // 16bit
 	if (vb2_plane_size(vb, 0) < size) {
-		spin_unlock_irqrestore(&pdx->videoslock[videodev->index], // FIXME: no index
+		spin_unlock_irqrestore(&pdx->videoslock[videodev->channel_index],
 				       flags);
 		return -EINVAL;
 	}
 	vb2_set_plane_payload(vb, 0, size);
 	buf->mem = vb2_plane_vaddr(vb, 0);
-    // FIXME: no index
-	spin_unlock_irqrestore(&pdx->videoslock[videodev->index], flags);
+	spin_unlock_irqrestore(&pdx->videoslock[videodev->channel_index], flags);
 	return 0;
 }
 
@@ -207,8 +197,7 @@ static void hws_buffer_queue(struct vb2_buffer *vb)
 	unsigned long flags;
 	struct hws_pcie_dev *pdx = videodev->dev;
 
-    // FIXME: no index
-	spin_lock_irqsave(&pdx->videoslock[videodev->index], flags);
+	spin_lock_irqsave(&pdx->videoslock[videodev->channel_index], flags);
 	list_add_tail(&buf->queue, &videodev->queue);
 	spin_unlock_irqrestore(&pdx->videoslock[videodev->index], flags);
 }
@@ -221,12 +210,10 @@ static int hws_start_streaming(struct vb2_queue *q, unsigned int count)
 	videodev->seqnr = 0;
 	mdelay(100);
 	//---------------
-    // FIXME: no index
-	StartVideoCapture(videodev->dev, videodev->index);
+	StartVideoCapture(videodev->dev, videodev->channel_index);
 	videodev->stream_start_index++;
 
-    // FIXME: no index
-	spin_lock_irqsave(&pdx->videoslock[videodev->index], flags);
+	spin_lock_irqsave(&pdx->videoslock[videodev->channel_index], flags);
 	while (!list_empty(&videodev->queue)) {
 		struct hwsvideo_buffer *buf = list_entry(
 			videodev->queue.next, struct hwsvideo_buffer, queue);
@@ -234,8 +221,7 @@ static int hws_start_streaming(struct vb2_queue *q, unsigned int count)
 
 		vb2_buffer_done(&buf->vb.vb2_buf, VB2_BUF_STATE_ERROR);
 	}
-    // FIXME: no index
-	spin_unlock_irqrestore(&pdx->videoslock[videodev->index], flags);
+	spin_unlock_irqrestore(&pdx->videoslock[videodev->channel_index], flags);
 	//-----------------------
 	return 0;
 }
