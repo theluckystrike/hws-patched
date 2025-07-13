@@ -295,7 +295,7 @@ static void hws_remove_deviceregister(struct hws_pcie_dev *dev)
 {
 	int i;
 	struct video_device *vdev;
-	for (i = 0; i < dev->m_nCurreMaxVideoChl; i++) {
+	for (i = 0; i < dev->cur_max_linein_ch; i++) {
 		// FIXME
 		// v4l2_ctrl_handler_free(&hws->video[i].ctrl_handler);
 		vdev = &(dev->video[i].vdev);
@@ -312,9 +312,9 @@ int hws_video_register(struct hws_pcie_dev *dev)
 	struct vb2_queue *q;
 	int i;
 	int err = -1;
-	//printk("hws_video_register Start\n");
-	for (i = 0; i < dev->m_nCurreMaxVideoChl; i++) {
-		//printk("v4l2_device_register[%d]\n",i);
+
+	for (i = 0; i < dev->cur_max_linein_ch; i++) {
+        // TODO: potentially use devm_v4l2_device_register here instead
 		err = v4l2_device_register(&dev->pdev->dev,
 					   &dev->video[i].v4l2_dev);
 		if (err < 0) {
@@ -323,48 +323,48 @@ int hws_video_register(struct hws_pcie_dev *dev)
 			return -1;
 		}
 	}
-	//printk("v4l2_device_register end\n");
 	//----------------------------------------------------
-	for (i = 0; i < dev->m_nCurreMaxVideoChl; i++) {
-		//printk("v4l2_device_register INT[%d]\n",i);
-		vdev = &(dev->video[i].vdev);
-		q = &(dev->video[i].vq);
+	for (i = 0; i < dev->cur_max_video_ch; i++) {
+		vdev = &(dev->video[i].video_device);
+		q = &(dev->video[i].buffer_queue);
 		if (NULL == vdev) {
 			printk(KERN_ERR " video_device_alloc failed !!!!! \n");
 			goto fail;
 		}
-		dev->video[i].index = i;
-		dev->video[i].dev = dev;
-		dev->video[i].fileindex = 0;
-		dev->video[i].startstreamIndex = 0;
-		dev->video[i].std = V4L2_STD_NTSC_M;
-		dev->video[i].pixfmt = V4L2_PIX_FMT_YUYV;
-		//-------------------
-		dev->video[i].m_Curr_Brightness = BrightnessDefault;
-		dev->video[i].m_Curr_Contrast = ContrastDefault;
-		dev->video[i].m_Curr_Saturation = SaturationDefault;
-		dev->video[i].m_Curr_Hue = HueDefault;
-		//-------------------
+		dev->video[i].channel_index = i;
+		dev->video[i].parent = dev;
+		dev->video[i].file_index = 0;
+		dev->video[i].stream_start_index = 0;
+		dev->video[i].tv_standard = V4L2_STD_NTSC_M;
+		dev->video[i].pixel_format = V4L2_PIX_FMT_YUYV;
+
+		dev->video[i].current_brightness = BrightnessDefault;
+		dev->video[i].current_contrast = ContrastDefault;
+		dev->video[i].current_saturation = SaturationDefault;
+		dev->video[i].current_hue = HueDefault;
+
 		vdev->device_caps = V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_STREAMING;
-		vdev->v4l2_dev = &(dev->video[i].v4l2_dev);
-		vdev->lock = &(dev->video[i].video_lock);
-		vdev->ctrl_handler = &(dev->video[i].ctrl_handler);
+		vdev->v4l2_dev = &(dev->video[i].v4l2_device);
+		vdev->lock = &(dev->video[i].state_lock);
+		vdev->ctrl_handler = &(dev->video[i].control_handler);
 		vdev->fops = &hws_fops;
+
 		strcpy(vdev->name, KBUILD_MODNAME);
+
 		vdev->release = video_device_release_empty;
 		vdev->vfl_dir = VFL_DIR_RX;
 		vdev->ioctl_ops = &hws_ioctl_fops;
-		mutex_init(&(dev->video[i].video_lock));
-		mutex_init(&(dev->video[i].queue_lock));
-		spin_lock_init(&dev->video[i].slock);
-		//printk("v4l2_device_register INT3[%d]\n",i);
-		INIT_LIST_HEAD(&dev->video[i].queue);
-		//printk("v4l2_device_register INT2[%d]\n",i);
+		mutex_init(&(dev->video[i].state_lock));
+		mutex_init(&(dev->video[i].capture_queue_lock));
+		spin_lock_init(&dev->video[i].irq_lock);
+
+		INIT_LIST_HEAD(&dev->video[i].capture_queue);
+
 		video_set_drvdata(vdev, &(dev->video[i]));
 
 		q->type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        // TODO: would love to enable VB2_DMABUF here
 		q->io_modes = VB2_READ | VB2_MMAP | VB2_USERPTR;
-		//q->io_modes = VB2_MMAP | VB2_USERPTR | VB2_DMABUF | VB2_READ;
 		q->gfp_flags = GFP_DMA32;
 		//q->min_buffers_needed = 2;
 		q->drv_priv = &(dev->video[i]);
@@ -377,7 +377,7 @@ int hws_video_register(struct hws_pcie_dev *dev)
 
 		q->timestamp_flags = V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC;
 
-		q->lock = &(dev->video[i].queue_lock);
+		q->lock = &(dev->video[i].capture_queue_lock);
 		q->dev = &(dev->pdev->dev);
 		vdev->queue = q;
 		err = vb2_queue_init(q);
@@ -386,12 +386,9 @@ int hws_video_register(struct hws_pcie_dev *dev)
 			goto fail;
 		}
 
-		INIT_WORK(&dev->video[i].videowork, video_data_process);
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 7, 0))
-		err = video_register_device(vdev, VFL_TYPE_GRABBER, -1);
-#else
+		INIT_WORK(&dev->video[i].video_work, video_data_process);
 		err = video_register_device(vdev, VFL_TYPE_VIDEO, -1);
-#endif
+
 		if (err != 0) {
 			printk(KERN_ERR
 			       " v4l2_device_register failed !!!!! \n");
@@ -400,13 +397,12 @@ int hws_video_register(struct hws_pcie_dev *dev)
 			//printk(" video_register_device OK !!!!! \n");
 		}
 	}
-	//printk("hws_video_register End\n");
 	return 0;
 fail:
-	for (i = 0; i < dev->m_nCurreMaxVideoChl; i++) {
+	for (i = 0; i < dev->cur_max_linein_ch; i++) {
 		vdev = &dev->video[i].vdev;
 		video_unregister_device(vdev);
-		v4l2_device_unregister(&dev->video[i].v4l2_dev);
+		v4l2_device_unregister(&dev->video[i].v4l2_device);
 	}
 	return err;
 }
