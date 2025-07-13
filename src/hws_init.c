@@ -61,17 +61,17 @@ void CheckCardStatus(struct hws_pcie_dev *pdx)
 
 static void hws_get_video_param(struct hws_pcie_dev *dev, int index)
 {
-	//printk( "%s(): %x \n", __func__, index);
 	int width, height;
-	width = dev->m_pVCAPStatus[index][0].dwWidth;
-	height = dev->m_pVCAPStatus[index][0].dwHeight;
+
+	width = dev->video[index].queue_status[0].width;
+	height = dev->video[index].queue_status.height;
+
 	dev->video[index].current_out_pixfmt = 0;
 	dev->video[index].current_out_size_index = 0;
 	dev->video[index].current_out_width = width;
 	dev->video[index].curren_out_height = height;
 	dev->video[index].current_out_framerate = 60;
-	dev->video[index].Interlaced = 0;
-	//printk( "%s(%dx%d):  \n", __func__, width,height);
+	dev->video[index].interlaced = false;
 }
 
 void hws_adapters_init(struct hws_pcie_dev *dev)
