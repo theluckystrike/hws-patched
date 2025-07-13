@@ -418,34 +418,3 @@ void StopKSThread(struct hws_pcie_dev *pdx)
 	}
 }
 
-static int MainKsThreadHandle(void *arg)
-{
-	int need_check = 0;
-	int i = 0;
-	struct hws_pcie_dev *pdx = (struct hws_pcie_dev *)(arg);
-	while (1) {
-		need_check = 0;
-		for (i = 0; i < pdx->m_nMaxChl; i++) {
-			if (pdx->m_bVCapStarted[i] == 1) {
-				need_check = 1;
-				break;
-			}
-		}
-		if (need_check == 1) {
-			CheckVideoFmt(pdx);
-		}
-		ssleep(1);
-		if (kthread_should_stop()) {
-			break;
-		}
-	}
-	//printk("MainKsThreadHandle Exit");
-	return 0;
-}
-
-void StartKSThread(struct hws_pcie_dev *pdx)
-{
-	pdx->mMain_tsk = kthread_run(MainKsThreadHandle, (void *)pdx,
-				     "StartKSThread task");
-}
-

@@ -138,6 +138,35 @@ int hws_video_init_channel(struct hws_pcie_dev *dev, int idx);
 int hws_audio_init_channel(struct hws_pcie_dev *dev, int idx);
 int hws_irq_setup(struct hws_pcie_dev *hws);
 
+static int main_ks_thread_handle(void *data)
+{
+    struct hws_pcie_dev *pdx = data;
+    int i;
+    bool need_check;
+
+    while (!kthread_should_stop()) {
+        need_check = false;
+
+        /* See if any channel is running */
+        for (i = 0; i < pdx->max_channels; i++) {
+            if (pdx->video[i].cap_active) {
+                need_check = true;
+                break;
+            }
+        }
+
+        if (need_check)
+            // FIXME
+            CheckVideoFmt(pdx);
+
+        /* Sleep 1s or until signaled to wake/stop */
+        schedule_timeout_interruptible(msecs_to_jiffies(1000));
+    }
+
+    pr_debug("%s: exiting\n", __func__);
+    return 0;
+}
+
 static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id)
 {
 	struct hws_pcie_dev *hws_dev= NULL;
@@ -206,13 +235,18 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
             goto err_cleanup;
     }
 
-	ret = dma_mem_alloc_pool(hws_dev);
+	ret = hws_dma_mem_alloc(hws_dev);
 	if (ret != 0) {
 		goto err_mem_alloc;
 	}
 
-	InitVideoSys(hws_dev, 0);
-	StartKSThread(hws_dev);
+	hws_init_video_sys(hws_dev, 0);
+
+    // NOTE: there are two loops, the `video_data_process` and this where we have periodic checks
+    // that we can see no video. `main_ks_thread_handle` calls `check_video_format` calls get_video_status`
+    // whereas the `video_data_process` checks a m_curr_No_Video instance which has since been refactored
+    
+    hws->main_task = kthread_run(main_ks_thread_handle, (void *)hws_dev, "start_ks_thread_task")
 
 	// NOTE: loops around `hws_get_video_param`, which sets values based on vcap status height/width
 	hws_adapters_init(hws_dev);
@@ -227,9 +261,9 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
 	return 0;
 err_mem_alloc:
 
-	hws_dev->m_bBufferAllocate = TRUE;
+	hws_dev->buf_allocated = TRUE;
 	dma_mem_free_pool(hws_dev);
-	hws_dev->m_bBufferAllocate = FALSE;
+	hws_dev->buf_allocated = FALSE;
 err_ctrl:
 	while (--i >= 0)
 		v4l2_ctrl_handler_free(&hws_dev->video[i].ctrl_handler);
