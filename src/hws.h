@@ -483,6 +483,7 @@ struct hws_pcie_dev {
 	u16                        hw_ver;
 	u32                        sub_ver;
 	u32                        port_id;
+    // TriState, used in `set_video_format_size`
 	u32                        support_yv12;
 	u32                        max_hw_video_buf_sz;
 	u8                         max_channels;

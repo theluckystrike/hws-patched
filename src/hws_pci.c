@@ -157,7 +157,7 @@ static int main_ks_thread_handle(void *data)
 
         if (need_check)
             // FIXME
-            CheckVideoFmt(pdx);
+            check_video_format(pdx);
 
         /* Sleep 1s or until signaled to wake/stop */
         schedule_timeout_interruptible(msecs_to_jiffies(1000));
@@ -185,13 +185,13 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
 	if (err) {
 		dev_err(&pci_dev->dev, "%s: pci_enable_device failed: %d\n",
 			__func__, err);
-		goto err_alloc;
+		goto err_free_dev;
 	}
 
     err = pci_request_regions(pci_dev, DRV_NAME);
     if (err) {
         dev_err(&pci_dev->dev, "pci_request_regions failed: %d\n", err);
-        goto disable_device;
+        goto err_disable_device;
     }
 
     /* map BAR0 via the PCI core: */
@@ -200,7 +200,8 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
     if (!hws_dev->bar0_base) {
         dev_err(&pci_dev->dev, "pci_iomap failed\n");
         err = -ENOMEM;
-        goto release_regions;
+        // FIXME
+        goto ;
     }
 
 
@@ -245,59 +246,49 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
     // NOTE: there are two loops, the `video_data_process` and this where we have periodic checks
     // that we can see no video. `main_ks_thread_handle` calls `check_video_format` calls get_video_status`
     // whereas the `video_data_process` checks a m_curr_No_Video instance which has since been refactored
-    
+   
+    // FIXME: using bad code in main_ks_thread_handle
     hws->main_task = kthread_run(main_ks_thread_handle, (void *)hws_dev, "start_ks_thread_task")
 
 	// NOTE: loops around `hws_get_video_param`, which sets values based on vcap status height/width
 	hws_adapters_init(hws_dev);
-	hws_dev->wq = create_singlethread_workqueue("hws");
-	hws_dev->auwq = create_singlethread_workqueue("hws-audio");
+	hws_dev->video_wq = create_singlethread_workqueue("hws");
+	hws_dev->audio_wq = create_singlethread_workqueue("hws-audio");
 
+    // FIXME: This func sucks
 	if (hws_video_register(hws_dev))
+        // FIXME: not sure this goto makes sense
 		goto err_mem_alloc;
 
+    // FIXME: This func sucks
 	if (hws_audio_register(hws_dev))
+        // FIXME: not sure this goto makes sense
 		goto err_mem_alloc;
 	return 0;
-err_mem_alloc:
-
-	hws_dev->buf_allocated = TRUE;
-	dma_mem_free_pool(hws_dev);
-	hws_dev->buf_allocated = FALSE;
-err_ctrl:
-	while (--i >= 0)
-		v4l2_ctrl_handler_free(&hws_dev->video[i].ctrl_handler);
-err_register:
-	iounmap(hws_dev->info.mem[0].internal_addr);
-	hws_free_irqs(hws_dev);
-disable_msi:
-	if (hws_dev->msix_enabled) {
-		pci_disable_msix(pci_dev);
-		hws_dev->msix_enabled = 0;
-	} else if (hws_dev->msi_enabled) {
-		pci_disable_msi(pci_dev);
-		hws_dev->msi_enabled = 0;
-	}
-release_regions:
-    pci_release_regions(pci_dev);
-disable_device:
-    pci_disable_device(pci_dev);
-err_release:
-	pci_release_regions(pci_dev);
-	pci_disable_device(pci_dev);
-	return err;
-err_alloc:
-	return -1;
-err_cleanup:
-    /* Teardown any channels that got initialized */
-    while (--i >= 0) {
-        snd_card_free(dev->audio[i].sound_card);
-        v4l2_device_unregister(&dev->video[i].v4l2_device);
-    }
-    destroy_workqueue(dev->video_wq);
-    destroy_workqueue(dev->audio_wq);
-    pci_disable_device(pdev);
-    return ret;
+err_unregister_video:
+        hws_video_unregister(hws);
+err_destroy_wq:
+        destroy_workqueue(hws->video_wq);
+        destroy_workqueue(hws->audio_wq);
+err_stop_thread:
+        if (!IS_ERR_OR_NULL(hws_dev->main_task))
+                kthread_stop(hws_dev->main_task);
+err_free_dma:
+        hws_dma_mem_free(hws);
+err_cleanup_channels:
+        hws_audio_cleanup_channels(hws);
+        hws_video_cleanup_channels(hws);
+err_irq:
+        hws_free_irqs(hws_dev);
+err_unmap_bar:
+        pci_iounmap(pdev, hws->bar0_base);
+err_release_regions:
+        pci_release_regions(pdev);
+err_disable_device:
+        pci_disable_device(pdev);
+err_free_dev:
+        kfree(hws);
+        return ret;
 }
 
 void hws_remove(struct pci_dev *pdev)

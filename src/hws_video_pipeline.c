@@ -27,22 +27,23 @@ static inline u32 hws_read_port_hpd(struct hws_pcie_dev *pdx, int port)
 	/* OR the two pipes that belong to this HDMI jack */
 	int pipe0 = port * 2;
 	int pipe1 = pipe0 + 1;
+    // FIXME
 	return  READ_REGISTER_ULONG(pdx, HWS_REG_HPD(pipe0)) |
 		READ_REGISTER_ULONG(pdx, HWS_REG_HPD(pipe1));
 }
 
-int SetVideoFormatSize(struct hws_pcie_dev *pdx, int ch, int w, int h)
+int set_video_format_size(struct hws_pcie_dev *pdx, int ch, int w, int h)
 {
 	int hf_size;
 	int down_size;
 	//int frame_size;
 	//int buf_cnt;
 
-	if (pdx->m_Device_SupportYV12 == 0) {
+	if (pdx->support_yv12 == 0) {
 		hf_size = (w * h) / (16 * 128);
 		hf_size = hf_size * 16 * 128;
 		down_size = (w * h * 2) - hf_size;
-	} else if (pdx->m_Device_SupportYV12 == 1) {
+	} else if (pdx->support_yv12 == 1) {
 		hf_size = (w * h * 12) / (16 * 16 * 128);
 		hf_size = hf_size * 16 * 128;
 		down_size = ((w * h * 12) / 8) - hf_size;
@@ -51,15 +52,16 @@ int SetVideoFormatSize(struct hws_pcie_dev *pdx, int ch, int w, int h)
 		hf_size = hf_size * 16 * 128;
 		down_size = ((w * h * 5) / 4) - hf_size;
 	}
-	pdx->m_format[ch].dwWidth = w; // Image Width
-	pdx->m_format[ch].dwWidth = w; // Image Width
-	pdx->m_format[ch].HLAF_SIZE = hf_size;
-	pdx->m_format[ch].DWON_SIZE = down_size;
-	//DbgPrint("[MV-X1]-CH0 SetVideoFormteSize = %d %d \n",m_format[ch].HLAF_SIZE,m_format[ch].DWON_SIZE);
+	pdx->video[ch].fmt_curr.width = w; // Image Width
+	pdx->video[ch].fmt_curr.height = h; // Image Height 
+                                        //
+	pdx->video[ch].fmt_curr.half_size = hf_size;
+	pdx->video[ch].fmt_curr.down_size = down_size;
 
 	return 1;
 }
-void ChangeVideoSize(struct hws_pcie_dev *pdx, int ch, int w, int h,
+
+void change_video_size(struct hws_pcie_dev *pdx, int ch, int w, int h,
 			    int interlace)
 {
 	int j;
@@ -67,13 +69,16 @@ void ChangeVideoSize(struct hws_pcie_dev *pdx, int ch, int w, int h,
 	unsigned long flags;
 	spin_lock_irqsave(&pdx->videoslock[ch], flags);
 	for (j = 0; j < MAX_VIDEO_QUEUE; j++) {
-		pdx->m_pVCAPStatus[ch][j].dwWidth = w;
-		pdx->m_pVCAPStatus[ch][j].dwHeight = h;
-		pdx->m_pVCAPStatus[ch][j].dwinterlace = interlace;
+		pdx->video[ch].queue_status[j].width = w;
+		pdx->video[ch].queue_status[j].height = h;
+		pdx->video[ch].queue_status[j].interlace = interlace;
 	}
 	spin_unlock_irqrestore(&pdx->videoslock[ch], flags);
-	SetVideoFormatSize(pdx, ch, w, h);
-	halfframeLength = pdx->m_format[ch].HLAF_SIZE / 16;
+
+	set_video_format_size(pdx, ch, w, h);
+	halfframeLength = pdx->video[ch].fmt_curr.half_size / 16;
+
+    // FIXME
 	WRITE_REGISTER_ULONG(
 		pdx, (DWORD)(CBVS_IN_BUF_BASE2 + (ch * PCIE_BARADDROFSIZE)),
 		halfframeLength); //Buffer 1 address
@@ -83,6 +88,8 @@ int CheckVideoCapture(struct hws_pcie_dev *pdx, int index)
 {
 	ULONG status;
 	int enable;
+
+    // FIXME
 	status = READ_REGISTER_ULONG(pdx, HWS_REG_VCAP_ENABLE);
 	enable = (status >> index) & 0x01;
 	return enable;
@@ -116,8 +123,8 @@ void hws_enable_video_capture(struct hws_pcie_dev *hws,
 int StartVideoCapture(struct hws_pcie_dev *pdx, int index)
 {
 	int j;
-	//unsigned long flags;
-	if (pdx->m_bVCapStarted[index] == 1) {
+
+	if (pdx->video[index].cap_active == 1) {
 		CheckCardStatus(pdx);
 		if (CheckVideoCapture(pdx, index) == 0) {
 			hws_enable_video_capture(pdx, index, true);
@@ -177,51 +184,23 @@ void StopVideoCapture(struct hws_pcie_dev *pdx, int index)
 	pdx->m_bVCapIntDone[index] = 0;
 }
 
-void CheckVideoFmt(struct hws_pcie_dev *pdx)
+void check_video_format(struct hws_pcie_dev *pdx)
 {
-	//PAGED_CODE();
 	int i;
-	//DWORD value;
-	//DWORD SetData;
-	//	int ret=0;
-	//int nNeed_ReInit =0;
-	//	unsigned char mark=1;
-	for (i = 0; i < pdx->m_nCurreMaxVideoChl; i++) {
-#if 0
-			value =  ReadDevReg((DWORD)(CVBS_IN_BASE + ((91+i*2)*PCIE_BARADDROFSIZE)));
-			m_brightness[i] = value&0xFF;
-			m_contrast[i] =  (value>>8)&0xFF;
-			m_hue[i] = (value>>16)&0xFF;
-			m_saturation[i] = (value>>24)&0xFF;
-			//DbgPrint("[MV]value[%d]= %X\n",i,value);
-			if((g_contrast[i] != m_contrast[i])||(g_brightness[i] != m_brightness[i])||(g_saturation[i] != m_saturation[i])||(g_hue[i] != m_hue[i]))
-			{
-				
-				//DbgPrint("[MV]m_brightness[%d]= %d %d \n",i,m_brightness[i],g_brightness[i]);
-				//DbgPrint("[MV]m_contrast[%d]= %d %d\n",i,m_contrast[i],g_contrast[i]);
-				//DbgPrint("[MV]m_hue[%d]= %d %d \n",i,m_hue[i],g_hue[i]);
-				//DbgPrint("[MV]m_saturation[%d]= %d %d \n",i,m_saturation[i],g_saturation[i] );
-				SetData = g_saturation[i]<<24;
-				SetData  |=g_hue[i]<<16;
-				SetData  |=g_contrast[i]<<8;
-				SetData  |=g_brightness[i];
-				//DbgPrint("[MV]value[%d]= %X %X\n",i,value,SetData);
-				WriteDevReg((DWORD)(CVBS_IN_BASE + ((91+i*2)*PCIE_BARADDROFSIZE)), SetData);
-				
-			}
-#endif
-		pdx->m_curr_No_Video[i] = Get_Video_Status(pdx, i);
-		//---------------
-		if ((pdx->m_curr_No_Video[i] == 0x1) &&
-		    (pdx->m_bVCapStarted[i] == TRUE)) {
-			//printk("[MV]check NoVideo End: [%d]\n",i);
-			queue_work(pdx->wq, &pdx->video[i].videowork);
+	for (i = 0; i < pdx->cur_max_video_ch; i++) {
+        // FIXME: figure out if we can check update_hpd_status early and exit fast
+		pdx->video[index].signal_loss_cnt = get_video_status(pdx, i);
+
+        /* If we just detected a loss on an active capture channel… */
+		if ((pdx->video[index].signal_loss_cnt  == 0x1) &&
+		    (pdx->video[index].cap_active == true)) {
+              /* …schedule the “no‐video” handler on the vido_wq workqueue */
+			queue_work(pdx->vido_wq, &pdx->video[i].videowork);
 		}
-		//-----------------
 	}
 }
 
-void init_video_sys(struct hws_pcie_dev *hws, bool enable)
+void hws_init_video_sys(struct hws_pcie_dev *hws, bool enable)
 {
     int i, j;
 
@@ -275,7 +254,10 @@ void init_video_sys(struct hws_pcie_dev *hws, bool enable)
 static inline void write_if_diff(struct hws_pcie_dev *pdx,
                                  u32 reg_addr, u32 new_val)
 {
+
+    // FIXME
     if (READ_REGISTER_ULONG(pdx, reg_addr) != new_val)
+        // FIXME
         WRITE_REGISTER_ULONG(pdx, reg_addr, new_val);
 }
 
@@ -302,12 +284,13 @@ static bool update_hpd_status(struct hws_pcie_dev *pdx, unsigned int ch)
 static bool update_active_and_interlace_flags(struct hws_pcie_dev *pdx,
                                               unsigned int ch)
 {
+    // FIXME
     u32  reg        = READ_REGISTER_ULONG(pdx, HWS_REG_ACTIVE_STATUS);
     bool active_vid = !!((reg >> ch) & 0x01);
     bool interlace  = !!(((reg >> 8) >> ch) & 0x01);
 
     /* Track interlace in driver state so other paths don’t re-decode */
-    pdx->m_pVCAPStatus[ch][0].dwinterlace = interlace;
+    pdx->video[ch].queue_status[0].interlace = interlace;
 
     return active_vid;               /* false → “no video” early-out   */
 }
@@ -318,50 +301,56 @@ static bool update_active_and_interlace_flags(struct hws_pcie_dev *pdx,
 static void handle_hwv2_path(struct hws_pcie_dev *pdx, unsigned int ch)
 {
     /* ── frame-rate in ─────────────────────────────────────────── */
+    // FIXME
     u32 frame_rate = READ_REGISTER_ULONG(pdx, HWS_REG_FRAME_RATE(ch));
-    pdx->m_pVCAPStatus[ch][0].dwFrameRate = frame_rate;
+    pdx->video[ch].queue_status[0].frame_rate = frame_rate;
 
     /* ── output resolution (programmed) ────────────────────────── */
+    // FIXME
     u32 reg          = READ_REGISTER_ULONG(pdx, HWS_REG_OUT_RES(ch));
     u16 out_res_w    =  reg        & 0xFFFF;
     u16 out_res_h    = (reg >> 16) & 0xFFFF;
 
-    if (out_res_w != pdx->m_pVCAPStatus[ch][0].dwOutWidth ||
-        out_res_h != pdx->m_pVCAPStatus[ch][0].dwOutHeight)
+    if (out_res_w != pdx->video[ch].queue_status[0].out_width ||
+        out_res_h != pdx->video[ch].queue_status[0].out_height)
     {
-        u32 packed =  (pdx->m_pVCAPStatus[ch][0].dwOutHeight << 16) |
-                       pdx->m_pVCAPStatus[ch][0].dwOutWidth;
+        u32 packed =  (pdx->video[ch].queue_status[0].out_height << 16) |
+                       pdx->video[ch].queue_status[0].out_width;
         write_if_diff(pdx, HWS_REG_OUT_RES(ch), packed);
     }
 
     /* ── output frame-rate (programmed) ────────────────────────── */
+    // FIXME
     u32 out_fps = READ_REGISTER_ULONG(pdx, HWS_REG_OUT_FRAME_RATE(ch));
-    if (out_fps != pdx->m_pVCAPStatus[ch][0].dwOutFrameRate)
+    if (out_fps != pdx->video[ch].queue_status[0].out_fps)
         write_if_diff(pdx, HWS_REG_OUT_FRAME_RATE(ch),
-                           pdx->m_pVCAPStatus[ch][0].dwOutFrameRate);
+                           pdx->video[ch].queue_status[0].out_fps);
 
     /* ── BCHS (brightness/contrast/hue/saturation) ─────────────── */
+    // FIXME
     reg = READ_REGISTER_ULONG(pdx, HWS_REG_BCHS(ch));
     u8 br =  reg        & 0xFF;
     u8 co = (reg >> 8)  & 0xFF;
     u8 hu = (reg >> 16) & 0xFF;
     u8 sa = (reg >> 24) & 0xFF;
 
-    if (br != pdx->m_brightness[ch] ||
-        co != pdx->m_contrast[ch]   ||
-        hu != pdx->m_hue[ch]        ||
-        sa != pdx->m_saturation[ch])
+    if (br != pdx->video[ch].current_brightness ||
+        co != pdx->video[ch].current_contrast   ||
+        hu != pdx->video[ch].current_hue        ||
+        sa != pdx->video[ch].current_saturation)
     {
-        u32 packed =  (pdx->m_saturation[ch] << 24) |
-                      (pdx->m_hue[ch]        << 16) |
-                      (pdx->m_contrast[ch]   <<  8) |
-                       pdx->m_brightness[ch];
+
+        u32 packed =  (pdx->video[ch].current_saturation << 24) |
+                      (pdx->video[ch].current_hue        << 16) |
+                      (pdx->video[ch].current_contrast   <<  8) |
+                       pdx->video[ch].current_brightness;
         write_if_diff(pdx, HWS_REG_BCHS(ch), packed);
     }
 
     /* ── HDCP detect bit ───────────────────────────────────────── */
+    // FIXME
     reg = READ_REGISTER_ULONG(pdx, HWS_REG_HDCP_STATUS);
-    pdx->m_pVCAPStatus[ch][0].dwhdcp = !!((reg >> ch) & 0x01);
+    pdx->video[ch].queue_status[0].hdcp = !!((reg >> ch) & 0x01);
 }
 
 /* ──────────────────────────────────────────────────────────────── */
@@ -369,6 +358,7 @@ static void handle_hwv2_path(struct hws_pcie_dev *pdx, unsigned int ch)
 /* ──────────────────────────────────────────────────────────────── */
 static void handle_legacy_path(struct hws_pcie_dev *pdx, unsigned int ch)
 {
+    // FIXME
     u32 sw_rate = pdx->m_dwSWFrameRate[ch];
 
     if (sw_rate > 10) {
@@ -379,22 +369,25 @@ static void handle_legacy_path(struct hws_pcie_dev *pdx, unsigned int ch)
         else if (sw_rate > 20 * 2) fps = 25;
         else                       fps = 60;  /* default fallback */
 
+        // FIXME
         pdx->m_pVCAPStatus[ch][0].dwFrameRate = fps;
     }
 
+    // FIXME
     pdx->m_dwSWFrameRate[ch] = 0;        /* reset estimator window */
 }
 
 /* ──────────────────────────────────────────────────────────────── */
-/* 3. Live input resolution + ChangeVideoSize() trigger            */
+/* 3. Live input resolution + change_video_size() trigger            */
 /* ──────────────────────────────────────────────────────────────── */
 static void update_live_resolution(struct hws_pcie_dev *pdx, unsigned int ch)
 {
+    // FIXME
     u32 reg   = READ_REGISTER_ULONG(pdx, HWS_REG_IN_RES(ch));
     u16 res_w =  reg        & 0xFFFF;
     u16 res_h = (reg >> 16) & 0xFFFF;
 
-    bool interlace = pdx->m_pVCAPStatus[ch][0].dwinterlace;
+    bool interlace = pdx->video[ch].queue_status[0].interlace;
 
     bool within_hw =
         (res_w <= MAX_VIDEO_HW_W) &&
@@ -402,18 +395,19 @@ static void update_live_resolution(struct hws_pcie_dev *pdx, unsigned int ch)
          ( interlace && (res_h * 2) <= MAX_VIDEO_HW_H));
 
     bool changed =
-        (res_w      != pdx->m_pVCAPStatus[ch][0].dwWidth) ||
-        (res_h      != pdx->m_pVCAPStatus[ch][0].dwHeight)||
-        (interlace  != pdx->m_pVCAPStatus[ch][0].dwinterlace);
+        (res_w      != pdx->video[ch].queue_status[0].width) ||
+        (res_h      != pdx->video[ch].queue_status[0].height)||
+        (interlace  != pdx->video[ch].queue_status[0].interlace);
 
     if (within_hw && changed)
-        ChangeVideoSize(pdx, ch, res_w, res_h, interlace);
+        change_video_size(pdx, ch, res_w, res_h, interlace);
 }
 
-int Get_Video_Status(struct hws_pcie_dev *pdx, unsigned int ch)
+int get_video_status(struct hws_pcie_dev *pdx, unsigned int ch)
 {
-    if (!update_hpd_status(pdx, ch))
-        return 1;                         /* no +5 V / HPD */
+    // FIXME: I don't think this works?
+    // if (!update_hpd_status(pdx, ch))
+    //    return 1;                         /* no +5 V / HPD */
 
     if (!update_active_and_interlace_flags(pdx, ch))
         return 1;                         /* no active video */
@@ -421,6 +415,7 @@ int Get_Video_Status(struct hws_pcie_dev *pdx, unsigned int ch)
     if (pdx->m_DeviceHW_Version > 0)
         handle_hwv2_path(pdx, ch);
     else
+        // FIXME: legacy struct names in subfunction
         handle_legacy_path(pdx, ch);
 
     update_live_resolution(pdx, ch);
