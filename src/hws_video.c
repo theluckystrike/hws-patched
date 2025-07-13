@@ -116,40 +116,36 @@ static const struct v4l2_ioctl_ops hws_ioctl_fops = {
 
 static int hws_queue_setup(struct vb2_queue *q, unsigned int *num_buffers,
 			   unsigned int *num_planes, unsigned int sizes[],
-			   struct device *alloc_devs[])
+			   const struct device *alloc_devs[])
 {
 	struct hws_video *videodev = q->drv_priv;
 	struct hws_pcie_dev *pdx = videodev->dev;
 	unsigned long flags;
-	unsigned size;
+    size_t size, tmp;
 	spin_lock_irqsave(&pdx->videoslock[videodev->channel_index], flags);
-	size = 2 * videodev->current_out_width *
-	       videodev->curren_out_height; // 16bit
+
+    if (check_mul_overflow(videodev->current_out_width, videodev->current_out_height, &tmp) ||
+        check_mul_overflow(tmp, 2, &size)) {
+		spin_unlock_irqrestore(&pdx->videoslock[videodev->channel_index],
+				       flags);
+        return -EOVERFLOW;
+    }
+    size = PAGE_ALIGN(size);
 	if (videodev->file_index > 1) {
 		spin_unlock_irqrestore(&pdx->videoslock[videodev->channel_index],
 				       flags);
 		return -EINVAL;
 	}
-	//printk( "q->num_buffers = %d *num_buffers =%d \n", q->num_buffers,*num_buffers);
-	//if (tot_bufs < 2)
-	//	tot_bufs = 2;
-	//tot_bufs = hws_buffer_count(size, tot_bufs);
-	//*num_buffers = tot_bufs - q->num_buffers;
+
 	if (*num_planes) {
-		if (sizes[0] < size) {
-			spin_unlock_irqrestore(
-				&pdx->videoslock[videodev->channel_index], flags);
-			return -EINVAL;
-		} else {
-			spin_unlock_irqrestore(
-				&pdx->videoslock[videodev->channel_index], flags);
-			return 0;
-		}
+        ret = sizes[0] < size ? -EINVAL : 0;
+        spin_unlock_irqrestore(
+            &pdx->videoslock[videodev->channel_index], flags);
+        return ret;
 	}
-	//printk( "%s()  num_buffers:%x tot_bufs:%x\n", __func__,*num_buffers,tot_bufs);
-	//printk( "%s()  sizes[0]= %d size= %d\n", __func__,sizes[0],size);
 	*num_planes = 1;
 	sizes[0] = size;
+    alloc_devs[0]    = &pdx->pdev->dev;
 	spin_unlock_irqrestore(&pdx->videoslock[videodev->channel_index], flags);
 	return 0;
 }
