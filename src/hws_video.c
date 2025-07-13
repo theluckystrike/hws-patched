@@ -410,11 +410,3 @@ fail:
 	}
 	return err;
 }
-
-void StopKSThread(struct hws_pcie_dev *pdx)
-{
-	if (pdx->mMain_tsk) {
-		kthread_stop(pdx->mMain_tsk);
-	}
-}
-

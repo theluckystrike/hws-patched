@@ -156,7 +156,7 @@ static int main_ks_thread_handle(void *data)
         }
 
         if (need_check)
-            // FIXME
+            // FIXME: figure out if we can check update_hpd_status early and exit fast
             check_video_format(pdx);
 
         /* Sleep 1s or until signaled to wake/stop */
@@ -247,7 +247,7 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
     // that we can see no video. `main_ks_thread_handle` calls `check_video_format` calls get_video_status`
     // whereas the `video_data_process` checks a m_curr_No_Video instance which has since been refactored
    
-    // FIXME: using bad code in main_ks_thread_handle
+    // FIXME: figure out if we can check update_hpd_status early and exit fast
     hws->main_task = kthread_run(main_ks_thread_handle, (void *)hws_dev, "start_ks_thread_task")
 
 	// NOTE: loops around `hws_get_video_param`, which sets values based on vcap status height/width
@@ -303,7 +303,12 @@ void hws_remove(struct pci_dev *pdev)
 	StopDevice(dev);
 	/* disable interrupts */
 	hws_free_irqs(dev);
-	StopKSThread(dev);
+
+    // FIXME 
+	if (pdx->mMain_tsk) {
+		kthread_stop(pdx->mMain_tsk);
+	}
+
 	//printk("hws_remove  0\n");
 	for (i = 0; i < MAX_VID_CHANNELS; i++) {
 		tasklet_kill(&dev->dpc_video_tasklet[i]);
