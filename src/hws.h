@@ -255,8 +255,6 @@ struct hws_video {
 	/* ───── linkage ───── */
 	struct hws_pcie_dev		*parent;		/* parent device */
 
-	/* ───── V4L2 framework objects ───── */
-	struct v4l2_device		 v4l2_device;
 	struct video_device		 video_device;
 	struct vb2_queue			 buffer_queue;
 	struct list_head			 capture_queue;
@@ -493,6 +491,9 @@ struct hws_pcie_dev {
 
 	bool                       buf_allocated;
 	u32                        audio_pkt_size;
+
+	/* ───── V4L2 framework objects ───── */
+	struct v4l2_device		 v4l2_device;
 
 	/* ───── kernel thread ───── */
 	struct task_struct        *main_task;

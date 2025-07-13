@@ -40,14 +40,13 @@ static ssize_t hws_read(struct file *file, char *buf, size_t count,
 static int hws_open(struct file *file)
 {
 	struct hws_video *videodev = video_drvdata(file);
-	//v4l2_model_timing_t *p_SupportmodeTiming;
 	unsigned long flags;
 	struct hws_pcie_dev *pdx = videodev->dev;
-	//printk( "%s(ch-%d)->%d\n", __func__,videodev->index,videodev->fileindex);
+    // FIXME: no index
 	spin_lock_irqsave(&pdx->videoslock[videodev->index], flags);
-	videodev->fileindex++;
+	videodev->file_index++;
+    // FIXME: no index
 	spin_unlock_irqrestore(&pdx->videoslock[videodev->index], flags);
-	//printk( "%s(ch-%d)END ->%d W=%d H=%d \n", __func__,videodev->index,videodev->fileindex,videodev->current_out_width,videodev->curren_out_height);
 	return 0;
 }
 
@@ -56,19 +55,20 @@ static int hws_release(struct file *file)
 	struct hws_video *videodev = video_drvdata(file);
 	unsigned long flags;
 	struct hws_pcie_dev *pdx = videodev->dev;
-	//printk( "%s(ch-%d)->%d\n", __func__,videodev->index,videodev->fileindex);
-	spin_lock_irqsave(&pdx->videoslock[videodev->index], flags);
-	if (videodev->fileindex > 0) {
-		videodev->fileindex--;
-	}
-	spin_unlock_irqrestore(&pdx->videoslock[videodev->index], flags);
-	//printk( "%s(ch-%d)->%d done\n", __func__,videodev->index,videodev->fileindex);
 
-	if (videodev->fileindex == 0) {
-		if (videodev->startstreamIndex > 0) {
-			//printk( "StopVideoCapture %s(%d)->%d [%d]\n", __func__,videodev->index,videodev->fileindex,videodev->startstreamIndex);
+    // FIXME: no index
+	spin_lock_irqsave(&pdx->videoslock[videodev->index], flags);
+	if (videodev->file_index > 0) {
+		videodev->file_index--;
+	}
+    // FIXME: no index
+	spin_unlock_irqrestore(&pdx->videoslock[videodev->index], flags);
+
+	if (videodev->file_index == 0) {
+		if (videodev->stream_start_index > 0) {
+            // FIXME: no index
 			StopVideoCapture(videodev->dev, videodev->index);
-			videodev->startstreamIndex = 0;
+			videodev->stream_start_index = 0;
 		}
 		return (vb2_fop_release(file));
 	} else {
@@ -127,11 +127,12 @@ static int hws_queue_setup(struct vb2_queue *q, unsigned int *num_buffers,
 	struct hws_pcie_dev *pdx = videodev->dev;
 	unsigned long flags;
 	unsigned size;
+    // FIXME: no index
 	spin_lock_irqsave(&pdx->videoslock[videodev->index], flags);
 	size = 2 * videodev->current_out_width *
 	       videodev->curren_out_height; // 16bit
-	//printk( "%s(%d)->%d[%d?=%d]\n", __func__,videodev->index,videodev->fileindex,sizes[0],size);
-	if (videodev->fileindex > 1) {
+	if (videodev->file_index > 1) {
+        // FIXME: no index
 		spin_unlock_irqrestore(&pdx->videoslock[videodev->index],
 				       flags);
 		return -EINVAL;
@@ -144,11 +145,11 @@ static int hws_queue_setup(struct vb2_queue *q, unsigned int *num_buffers,
 	if (*num_planes) {
 		if (sizes[0] < size) {
 			spin_unlock_irqrestore(
-				&pdx->videoslock[videodev->index], flags);
+				&pdx->videoslock[videodev->index], flags); // FIXME: no index
 			return -EINVAL;
 		} else {
 			spin_unlock_irqrestore(
-				&pdx->videoslock[videodev->index], flags);
+				&pdx->videoslock[videodev->index], flags); // FIXME: no index
 			return 0;
 		}
 	}
@@ -156,6 +157,7 @@ static int hws_queue_setup(struct vb2_queue *q, unsigned int *num_buffers,
 	//printk( "%s()  sizes[0]= %d size= %d\n", __func__,sizes[0],size);
 	*num_planes = 1;
 	sizes[0] = size;
+    // FIXME: no index
 	spin_unlock_irqrestore(&pdx->videoslock[videodev->index], flags);
 	return 0;
 }
@@ -169,17 +171,19 @@ static int hws_buffer_prepare(struct vb2_buffer *vb)
 	struct hws_pcie_dev *pdx = videodev->dev;
 	u32 size;
 	unsigned long flags;
-	//printk( "%s(W = %d H=%d)\n", __func__,videodev->current_out_width,videodev->curren_out_height);
+
+    // FIXME: no index
 	spin_lock_irqsave(&pdx->videoslock[videodev->index], flags);
 	size = 2 * videodev->current_out_width *
 	       videodev->curren_out_height; // 16bit
 	if (vb2_plane_size(vb, 0) < size) {
-		spin_unlock_irqrestore(&pdx->videoslock[videodev->index],
+		spin_unlock_irqrestore(&pdx->videoslock[videodev->index], // FIXME: no index
 				       flags);
 		return -EINVAL;
 	}
 	vb2_set_plane_payload(vb, 0, size);
 	buf->mem = vb2_plane_vaddr(vb, 0);
+    // FIXME: no index
 	spin_unlock_irqrestore(&pdx->videoslock[videodev->index], flags);
 	return 0;
 }
@@ -203,7 +207,7 @@ static void hws_buffer_queue(struct vb2_buffer *vb)
 	unsigned long flags;
 	struct hws_pcie_dev *pdx = videodev->dev;
 
-	//printk( "%s(%d)\n", __func__,videodev->index);
+    // FIXME: no index
 	spin_lock_irqsave(&pdx->videoslock[videodev->index], flags);
 	list_add_tail(&buf->queue, &videodev->queue);
 	spin_unlock_irqrestore(&pdx->videoslock[videodev->index], flags);
@@ -214,25 +218,14 @@ static int hws_start_streaming(struct vb2_queue *q, unsigned int count)
 	struct hws_video *videodev = q->drv_priv;
 	unsigned long flags;
 	struct hws_pcie_dev *pdx = videodev->dev;
-//printk( "%s(%d)->%d\n", __func__,videodev->index,videodev->fileindex);
-#if 0
-	if(videodev->fileindex >1)
-	{
-		return -EINVAL;
-	}
-#endif
 	videodev->seqnr = 0;
 	mdelay(100);
 	//---------------
-	//if(videodev->fileindex==1)
-	//{
-	//printk( "StartVideoCapture %s(%d)->%d\n", __func__,videodev->index,videodev->fileindex);
+    // FIXME: no index
 	StartVideoCapture(videodev->dev, videodev->index);
-	videodev->startstreamIndex++;
-	//------------------------ reset queue
-	//printk( "%s(%d)->%d  reset queue \n", __func__,videodev->index,videodev->fileindex);
+	videodev->stream_start_index++;
 
-	//}
+    // FIXME: no index
 	spin_lock_irqsave(&pdx->videoslock[videodev->index], flags);
 	while (!list_empty(&videodev->queue)) {
 		struct hwsvideo_buffer *buf = list_entry(
@@ -241,6 +234,7 @@ static int hws_start_streaming(struct vb2_queue *q, unsigned int count)
 
 		vb2_buffer_done(&buf->vb.vb2_buf, VB2_BUF_STATE_ERROR);
 	}
+    // FIXME: no index
 	spin_unlock_irqrestore(&pdx->videoslock[videodev->index], flags);
 	//-----------------------
 	return 0;
@@ -251,19 +245,11 @@ static void hws_stop_streaming(struct vb2_queue *q)
 	struct hws_video *videodev = q->drv_priv;
 	unsigned long flags;
 	struct hws_pcie_dev *pdx = videodev->dev;
-//printk( "%s(%d)->%d\n", __func__,videodev->index,videodev->fileindex);
-
-//if(videodev->seqnr){
-//vb2_wait_for_all_buffers(q);
-//	mdelay(100);
-//printk( "%s() vb2_wait_for_all_buffers\n", __func__);
-//}
-#if 1
 	//-----------------------------------
-	videodev->startstreamIndex--;
-	if (videodev->startstreamIndex < 0)
-		videodev->startstreamIndex = 0;
-	if (videodev->startstreamIndex == 0) {
+	videodev->stream_start_index--;
+	if (videodev->stream_start_index< 0)
+		videodev->stream_start_index = 0;
+	if (videodev->stream_start_index == 0) {
 		//printk( "StopVideoCapture %s(%d)->%d [%d]\n", __func__,videodev->index,videodev->fileindex,videodev->startstreamIndex);
 		StopVideoCapture(videodev->dev, videodev->index);
 	}
@@ -277,7 +263,6 @@ static void hws_stop_streaming(struct vb2_queue *q)
 	}
 	spin_unlock_irqrestore(&pdx->videoslock[videodev->index], flags);
 //-----------------------------------------------------------------
-#endif
 }
 
 static const struct vb2_ops hwspcie_video_qops = {
@@ -291,21 +276,6 @@ static const struct vb2_ops hwspcie_video_qops = {
 	.stop_streaming = hws_stop_streaming,
 };
 
-static void hws_remove_deviceregister(struct hws_pcie_dev *dev)
-{
-	int i;
-	struct video_device *vdev;
-	for (i = 0; i < dev->cur_max_linein_ch; i++) {
-		// FIXME
-		// v4l2_ctrl_handler_free(&hws->video[i].ctrl_handler);
-		vdev = &(dev->video[i].vdev);
-		if (vdev) {
-			v4l2_device_unregister(&dev->video[i].v4l2_dev);
-			vdev = NULL;
-		}
-	}
-}
-
 int hws_video_register(struct hws_pcie_dev *dev)
 {
 	struct video_device *vdev;
@@ -313,16 +283,13 @@ int hws_video_register(struct hws_pcie_dev *dev)
 	int i;
 	int err = -1;
 
-	for (i = 0; i < dev->cur_max_linein_ch; i++) {
-        // TODO: potentially use devm_v4l2_device_register here instead
-		err = v4l2_device_register(&dev->pdev->dev,
-					   &dev->video[i].v4l2_dev);
-		if (err < 0) {
-			printk(KERN_ERR " v4l2_device_register 0 error! \n");
-			hws_remove_deviceregister(dev);
-			return -1;
-		}
+	err = devm_v4l2_device_register(&dev->pdev->dev, &dev->v4l2_dev);
+	if (err) {
+		dev_err(&dev->pdev->dev,
+			"v4l2_device_register failed: %d\n", err);
+		return err;
 	}
+
 	//----------------------------------------------------
 	for (i = 0; i < dev->cur_max_video_ch; i++) {
 		vdev = &(dev->video[i].video_device);
@@ -343,28 +310,35 @@ int hws_video_register(struct hws_pcie_dev *dev)
 		dev->video[i].current_saturation = SaturationDefault;
 		dev->video[i].current_hue = HueDefault;
 
-		vdev->device_caps = V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_STREAMING;
-		vdev->v4l2_dev = &(dev->video[i].v4l2_device);
-		vdev->lock = &(dev->video[i].state_lock);
-		vdev->ctrl_handler = &(dev->video[i].control_handler);
-		vdev->fops = &hws_fops;
-
-		strcpy(vdev->name, KBUILD_MODNAME);
-
-		vdev->release = video_device_release_empty;
-		vdev->vfl_dir = VFL_DIR_RX;
-		vdev->ioctl_ops = &hws_ioctl_fops;
+		/* ---------- initialise locks & lists ---------- */
 		mutex_init(&(dev->video[i].state_lock));
 		mutex_init(&(dev->video[i].capture_queue_lock));
 		spin_lock_init(&dev->video[i].irq_lock);
-
 		INIT_LIST_HEAD(&dev->video[i].capture_queue);
 
-		video_set_drvdata(vdev, &(dev->video[i]));
+		/* ---------- fill in struct video_device ------- */
+		memset(vdev, 0, sizeof(*vdev));
+		vdev->v4l2_dev     = &dev->v4l2_dev;
+		vdev->fops = &hws_fops;
+		vdev->ioctl_ops = &hws_ioctl_fops;
+		vdev->device_caps = V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_STREAMING;
 
+		vdev->lock = &(dev->video[i].state_lock);
+		vdev->ctrl_handler = &(dev->video[i].control_handler);
+		vdev->vfl_dir = VFL_DIR_RX;
+		vdev->release = video_device_release_empty;
+		video_device_set_name(vdev, "%s-hdmi%d",
+				      KBUILD_MODNAME, i);
+
+		video_set_drvdata(vdev, &dev->video[i]);
+
+		memset(q, 0, sizeof(*q));
 		q->type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+
         // TODO: would love to enable VB2_DMABUF here
 		q->io_modes = VB2_READ | VB2_MMAP | VB2_USERPTR;
+
+        // FIXME: Figure out if the hw only supports 4 GB RAM
 		q->gfp_flags = GFP_DMA32;
 		//q->min_buffers_needed = 2;
 		q->drv_priv = &(dev->video[i]);
@@ -381,28 +355,25 @@ int hws_video_register(struct hws_pcie_dev *dev)
 		q->dev = &(dev->pdev->dev);
 		vdev->queue = q;
 		err = vb2_queue_init(q);
-		if (err != 0) {
-			printk(KERN_ERR " vb2_queue_init failed !!!!! \n");
-			goto fail;
+		if (err) {
+			dev_err(&dev->pdev->dev,
+				"vb2_queue_init(ch%d) failed: %d\n", i, err);
+			goto err_unreg_nodes;
 		}
 
 		INIT_WORK(&dev->video[i].video_work, video_data_process);
 		err = video_register_device(vdev, VFL_TYPE_VIDEO, -1);
-
-		if (err != 0) {
-			printk(KERN_ERR
-			       " v4l2_device_register failed !!!!! \n");
-			goto fail;
-		} else {
-			//printk(" video_register_device OK !!!!! \n");
+		if (err) {
+			dev_err(&dev->pdev->dev,
+				"video_register_device(ch%d) failed: %d\n",
+				i, err);
+			goto err_unreg_nodes;
 		}
 	}
 	return 0;
-fail:
-	for (i = 0; i < dev->cur_max_linein_ch; i++) {
-		vdev = &dev->video[i].vdev;
-		video_unregister_device(vdev);
-		v4l2_device_unregister(&dev->video[i].v4l2_device);
-	}
+err_unreg_nodes:
+	while (--i >= 0)
+		video_unregister_device(&dev->video[i].video_device);
+
 	return err;
 }
