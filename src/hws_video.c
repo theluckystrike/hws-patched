@@ -108,6 +108,8 @@ static int hws_queue_setup(struct vb2_queue *q, unsigned int *num_buffers,
 	if (vb2_is_busy(q))
         return -EBUSY;
 
+	// FIXME: Get smart on lock scope, might be better to not spin lock
+	// on this scope to do overflow math
 	spin_lock_irqsave(&pdx->videoslock[videodev->channel_index], flags);
 
     if (check_mul_overflow(videodev->current_out_width, videodev->current_out_height, &tmp) ||
@@ -119,7 +121,7 @@ static int hws_queue_setup(struct vb2_queue *q, unsigned int *num_buffers,
     size = PAGE_ALIGN(size);
 
 	if (*num_planes) {
-        ret = sizes[0] < size ? -EINVAL : 0;
+        int ret = sizes[0] < size ? -EINVAL : 0;
         spin_unlock_irqrestore(
             &pdx->videoslock[videodev->channel_index], flags);
         return ret;
@@ -143,7 +145,7 @@ static int hws_buffer_prepare(struct vb2_buffer *vb)
 
 	spin_lock_irqsave(&pdx->videoslock[videodev->channel_index], flags);
 	size = 2 * videodev->current_out_width *
-	       videodev->curren_out_height; // 16bit
+	       videodev->current_out_height; // 16bit
 	if (vb2_plane_size(vb, 0) < size) {
 		spin_unlock_irqrestore(&pdx->videoslock[videodev->channel_index],
 				       flags);
@@ -153,16 +155,6 @@ static int hws_buffer_prepare(struct vb2_buffer *vb)
 	buf->mem = vb2_plane_vaddr(vb, 0);
 	spin_unlock_irqrestore(&pdx->videoslock[videodev->channel_index], flags);
 	return 0;
-}
-
-static void hws_buffer_finish(struct vb2_buffer *vb)
-{
-	//struct vb2_v4l2_buffer *vbuf = to_vb2_v4l2_buffer(vb);
-	//struct hwsvideo_buffer *buf =
-	//	container_of(vbuf, struct hwsvideo_buffer, vb);
-	//struct hws_video *videodev = vb->vb2_queue->drv_priv;
-	//printk( "%s()\n", __func__);
-	return;
 }
 
 static void hws_buffer_queue(struct vb2_buffer *vb)
@@ -176,7 +168,7 @@ static void hws_buffer_queue(struct vb2_buffer *vb)
 
 	spin_lock_irqsave(&pdx->videoslock[videodev->channel_index], flags);
 	list_add_tail(&buf->queue, &videodev->queue);
-	spin_unlock_irqrestore(&pdx->videoslock[videodev->index], flags);
+	spin_unlock_irqrestore(&pdx->videoslock[videodev->channel_index], flags);
 }
 
 static int hws_start_streaming(struct vb2_queue *q, unsigned int count)
@@ -225,7 +217,7 @@ static void hws_stop_streaming(struct vb2_queue *q)
 static const struct vb2_ops hwspcie_video_qops = {
 	.queue_setup = hws_queue_setup,
 	.buf_prepare = hws_buffer_prepare,
-	.buf_finish = hws_buffer_finish,
+	// .buf_finish = hws_buffer_finish,
 	.buf_queue = hws_buffer_queue,
 	.wait_prepare = vb2_ops_wait_prepare,
 	.wait_finish = vb2_ops_wait_finish,
