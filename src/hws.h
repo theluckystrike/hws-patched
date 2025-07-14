@@ -206,8 +206,6 @@ struct hws_dmabuf{
 | `vdev`                   | `video_device`            | hws\_video                      |
 | `vq`                     | `buffer_queue`            | hws\_video                      |
 | `queue`                  | `capture_queue`           | hws\_video                      |
-| `fileindex`              | `file_index`              | hws\_video                      |
-| `startstreamIndex`       | `stream_start_index`      | hws\_video                      |
 | `seqnr`                  | `sequence_number`         | hws\_video                      |
 | `video_lock`             | `state_lock`              | hws\_video                      |
 | `queue_lock`             | `capture_queue_lock`      | hws\_video                      |
@@ -259,10 +257,8 @@ struct hws_video {
 	struct vb2_queue			 buffer_queue;
 	struct list_head			 capture_queue;
 
-	/* ───── file & stream bookkeeping ───── */
-	int					 	 file_index;
-	int			 			 stream_start_index;
-	unsigned int			 sequence_number;
+	/* ───── stream bookkeeping ───── */
+	atomic_t                 sequence_number;
 
 	/* ───── locking ───── */
 	struct mutex			 state_lock;		  /* primary state */

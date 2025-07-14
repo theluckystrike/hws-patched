@@ -622,7 +622,7 @@ void video_data_process(struct work_struct *work)
 	/* ------------------------------------------------------------
 	 * 3. Return vb2 buffer downstream
 	 * ------------------------------------------------------------ */
-	ctx.dst_buf->vb.sequence           = dev->seqnr++;
+	ctx.dst_buf->vb.sequence           = atomic_inc_return(&dev->sequence_number);
 	ctx.dst_buf->vb.vb2_buf.timestamp  = ktime_get_ns();
 	ctx.dst_buf->vb.field              = V4L2_FIELD_NONE;
 	vb2_buffer_done(&ctx.dst_buf->vb.vb2_buf, VB2_BUF_STATE_DONE);

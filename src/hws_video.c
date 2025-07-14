@@ -39,36 +39,18 @@ static ssize_t hws_read(struct file *file, char *buf, size_t count,
 
 static int hws_open(struct file *file)
 {
-	struct hws_video *videodev = video_drvdata(file);
-	unsigned long flags;
-	struct hws_pcie_dev *pdx = videodev->dev;
-	spin_lock_irqsave(&pdx->videoslock[videodev->channel_index], flags);
-	videodev->file_index++;
-	spin_unlock_irqrestore(&pdx->videoslock[videodev->channel_index], flags);
-	return 0;
+    struct hws_video *vid = video_drvdata(file);
+
+    /* Hard-fail additional opens while a capture is active */
+    if (!v4l2_fh_is_singular_file(file) && vb2_is_busy(vid->queue))
+        return -EBUSY;
+
+    return 0;          /* nothing else to count */
 }
 
 static int hws_release(struct file *file)
 {
-	struct hws_video *videodev = video_drvdata(file);
-	unsigned long flags;
-	struct hws_pcie_dev *pdx = videodev->dev;
-
-	spin_lock_irqsave(&pdx->videoslock[videodev->channel_index], flags);
-	if (videodev->file_index > 0) {
-		videodev->file_index--;
-	}
-	spin_unlock_irqrestore(&pdx->videoslock[videodev->channel_index], flags);
-
-	if (videodev->file_index == 0) {
-		if (videodev->stream_start_index > 0) {
-			StopVideoCapture(videodev->dev, videodev->channel_index);
-			videodev->stream_start_index = 0;
-		}
-		return (vb2_fop_release(file));
-	} else {
-		return 0;
-	}
+    return vb2_fop_release(file);
 }
 
 //----------------------------
@@ -122,6 +104,10 @@ static int hws_queue_setup(struct vb2_queue *q, unsigned int *num_buffers,
 	struct hws_pcie_dev *pdx = videodev->dev;
 	unsigned long flags;
     size_t size, tmp;
+
+	if (vb2_is_busy(q))
+        return -EBUSY;
+
 	spin_lock_irqsave(&pdx->videoslock[videodev->channel_index], flags);
 
     if (check_mul_overflow(videodev->current_out_width, videodev->current_out_height, &tmp) ||
@@ -203,11 +189,11 @@ static int hws_start_streaming(struct vb2_queue *q, unsigned int count)
 	struct hws_video *videodev = q->drv_priv;
 	unsigned long flags;
 	struct hws_pcie_dev *pdx = videodev->dev;
-	videodev->seqnr = 0;
-	mdelay(100);
+
+	atomic_set(&videodev->sequence_number, 0);
 	//---------------
+	// FIXME: This function sucks
 	StartVideoCapture(videodev->dev, videodev->channel_index);
-	videodev->stream_start_index++;
 
 	spin_lock_irqsave(&pdx->videoslock[videodev->channel_index], flags);
 	while (!list_empty(&videodev->queue)) {
@@ -228,13 +214,7 @@ static void hws_stop_streaming(struct vb2_queue *q)
 	unsigned long flags;
 	struct hws_pcie_dev *pdx = videodev->dev;
 	//-----------------------------------
-	videodev->stream_start_index--;
-	if (videodev->stream_start_index< 0)
-		videodev->stream_start_index = 0;
-	if (videodev->stream_start_index == 0) {
-		//printk( "StopVideoCapture %s(%d)->%d [%d]\n", __func__,videodev->index,videodev->fileindex,videodev->startstreamIndex);
-		StopVideoCapture(videodev->dev, videodev->index);
-	}
+	StopVideoCapture(videodev->dev, videodev->index);
 	//------------------
 	spin_lock_irqsave(&pdx->videoslock[videodev->index], flags);
 	while (!list_empty(&videodev->queue)) {
@@ -283,7 +263,6 @@ int hws_video_register(struct hws_pcie_dev *dev)
 		dev->video[i].channel_index = i;
 		dev->video[i].parent = dev;
 		dev->video[i].file_index = 0;
-		dev->video[i].stream_start_index = 0;
 		dev->video[i].tv_standard = V4L2_STD_NTSC_M;
 		dev->video[i].pixel_format = V4L2_PIX_FMT_YUYV;
 
