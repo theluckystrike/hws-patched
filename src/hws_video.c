@@ -117,11 +117,6 @@ static int hws_queue_setup(struct vb2_queue *q, unsigned int *num_buffers,
         return -EOVERFLOW;
     }
     size = PAGE_ALIGN(size);
-	if (videodev->file_index > 1) {
-		spin_unlock_irqrestore(&pdx->videoslock[videodev->channel_index],
-				       flags);
-		return -EINVAL;
-	}
 
 	if (*num_planes) {
         ret = sizes[0] < size ? -EINVAL : 0;
@@ -262,7 +257,6 @@ int hws_video_register(struct hws_pcie_dev *dev)
 		}
 		dev->video[i].channel_index = i;
 		dev->video[i].parent = dev;
-		dev->video[i].file_index = 0;
 		dev->video[i].tv_standard = V4L2_STD_NTSC_M;
 		dev->video[i].pixel_format = V4L2_PIX_FMT_YUYV;
 
