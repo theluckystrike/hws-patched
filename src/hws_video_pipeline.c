@@ -27,7 +27,7 @@ static inline u32 hws_read_port_hpd(struct hws_pcie_dev *pdx, int port)
 	/* OR the two pipes that belong to this HDMI jack */
 	int pipe0 = port * 2;
 	int pipe1 = pipe0 + 1;
-    // FIXME
+	// FIXME
 	return  READ_REGISTER_ULONG(pdx, HWS_REG_HPD(pipe0)) |
 		READ_REGISTER_ULONG(pdx, HWS_REG_HPD(pipe1));
 }
@@ -36,8 +36,6 @@ int set_video_format_size(struct hws_pcie_dev *pdx, int ch, int w, int h)
 {
 	int hf_size;
 	int down_size;
-	//int frame_size;
-	//int buf_cnt;
 
 	if (pdx->support_yv12 == 0) {
 		hf_size = (w * h) / (16 * 128);
@@ -54,7 +52,7 @@ int set_video_format_size(struct hws_pcie_dev *pdx, int ch, int w, int h)
 	}
 	pdx->video[ch].fmt_curr.width = w; // Image Width
 	pdx->video[ch].fmt_curr.height = h; // Image Height 
-                                        //
+
 	pdx->video[ch].fmt_curr.half_size = hf_size;
 	pdx->video[ch].fmt_curr.down_size = down_size;
 
@@ -78,18 +76,18 @@ void change_video_size(struct hws_pcie_dev *pdx, int ch, int w, int h,
 	set_video_format_size(pdx, ch, w, h);
 	halfframeLength = pdx->video[ch].fmt_curr.half_size / 16;
 
-    // FIXME
+	// FIXME
 	WRITE_REGISTER_ULONG(
 		pdx, (DWORD)(CBVS_IN_BUF_BASE2 + (ch * PCIE_BARADDROFSIZE)),
 		halfframeLength); //Buffer 1 address
 }
 
-int CheckVideoCapture(struct hws_pcie_dev *pdx, int index)
+int check_video_capture(struct hws_pcie_dev *pdx, int index)
 {
-	ULONG status;
+	u32 status;
 	int enable;
 
-    // FIXME
+	// FIXME
 	status = READ_REGISTER_ULONG(pdx, HWS_REG_VCAP_ENABLE);
 	enable = (status >> index) & 0x01;
 	return enable;
@@ -125,14 +123,15 @@ int StartVideoCapture(struct hws_pcie_dev *pdx, int index)
 	int j;
 
 	if (pdx->video[index].cap_active == 1) {
-		CheckCardStatus(pdx);
-		if (CheckVideoCapture(pdx, index) == 0) {
+		// FIXME: legacy in func
+		check_card_status(pdx);
+		if (check_video_capture(pdx, index) == 0) {
 			hws_enable_video_capture(pdx, index, true);
 		}
 		return -1;
 	}
 	//--------------------
-	CheckCardStatus(pdx);
+	check_card_status(pdx);
 	//--------------------
 	//spin_lock_irqsave(&pdx->videoslock[index], flags);
 	for (j = 0; j < MAX_VIDEO_QUEUE; j++) {

@@ -6,29 +6,35 @@
 #include "hws_audio_pipeline.h"
 #include "hws_dma.h"
 
-static int Check_Busy(struct hws_pcie_dev *pdx)
+/* how often to poll (in µs), and total timeout (in µs) */
+#define HWS_BUSY_POLL_DELAY_US   10
+#define HWS_BUSY_POLL_TIMEOUT_US 1000000
+
+
+/**
+ * hws_check_sys_busy() – wait for SYS_STATUS busy bit to clear
+ * @pdx: our PCIe device state, with mmio_base already ioremap’ed
+ *
+ * Returns 0 if the busy bit cleared in time, or –ETIMEDOUT on timeout.
+ */
+static int hws_check_sys_busy(struct hws_pcie_dev *pdx)
 {
-	u32 statusreg;
-	u32 TimeOut = 0;
-	//DbgPrint(("Check Busy in !!!\n"));
-	//WRITE_REGISTER_ULONG((u32)(0x4000), 0x10);
-	while (1) {
-		statusreg = READ_REGISTER_ULONG(pdx, HWS_REG_SYS_STATUS);
-		printk("[MV] Check_Busy!!! statusreg =%X\n", statusreg);
-		if (statusreg == 0xFFFFFFFF) {
-			break;
-		}
-		if ((statusreg & HWS_SYS_DMA_BUSY_BIT) == 0) {
-			break;
-		}
-		TimeOut++;
-		msleep(10);
-	}
-	//WRITE_REGISTER_ULONG((u32)(0x4000), 0x10);
+    void __iomem *reg = pdx->mmio_base + HWS_REG_SYS_STATUS;
+    u32 val;
+    int ret;
 
-	//DbgPrint(("Check Busy out !!!\n"));
+    /* poll until !(val & BUSY_BIT), sleeping HWS_BUSY_POLL_DELAY_US between reads */
+    ret = readl_poll_timeout(reg, val,
+                             !(val & HWS_SYS_DMA_BUSY_BIT),
+                             HWS_BUSY_POLL_DELAY_US,
+                             HWS_BUSY_POLL_TIMEOUT_US);
+    if (ret) {
+        dev_err(&pdx->pdev->dev,
+                "SYS_STATUS busy bit never cleared (0x%08x)\n", val);
+        return -ETIMEDOUT;
+    }
 
-	return 0;
+    return 0;
 }
 
 static void StopDsp(struct hws_pcie_dev *pdx)
@@ -41,20 +47,19 @@ static void StopDsp(struct hws_pcie_dev *pdx)
 		return;
 	}
 	WRITE_REGISTER_ULONG(pdx, HWS_REG_DEC_MODE, 0x10);
+	// FIXME: not reading return result for -ETIMEDOUT
 	Check_Busy(pdx);
 	WRITE_REGISTER_ULONG(pdx, HWS_REG_VCAP_ENABLE, 0x00);
 }
 
 
 //---------------------------------------
-void CheckCardStatus(struct hws_pcie_dev *pdx)
+void check_card_status(struct hws_pcie_dev *pdx)
 {
-	ULONG status;
+	u32 status;
 	status = READ_REGISTER_ULONG(pdx, HWS_REG_SYS_STATUS);
 
-	//DbgPrint("CheckCardStatus =%X",status);
 	if ((status & BIT(0)) != BIT(0)) {
-		//DbgPrint("CheckCardStatus =%X",status);
 		InitVideoSys(pdx, 1);
 	}
 }
