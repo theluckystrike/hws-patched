@@ -196,48 +196,70 @@ CLANG_BASE_ARGS = ["-fsyntax-only",
 # Phase-2  – Call-graph extraction with GCC                                   #
 # --------------------------------------------------------------------------- #
 
-CGRAPH_RE = re.compile(r'^\s*([A-Za-z0-9_]+)\s*->\s*([A-Za-z0-9_]+)')
+EDGE_RE     = re.compile(r'^\s*([\w\.\*]+)(?:/\d+)?\s*->\s*([\w\.\*]+)(?:/\d+)?')
+LIST_RE = re.compile(r'^\s*(Called by|Calls):\s*(.*)$')
+SYMBOL_RE = re.compile(r'([\w\.\*]+)/\d+')
 
 def gcc_cgraph_extract(worktree: Path) -> List[Tuple[str, str]]:
     """
-    Compile every .c file under *worktree* with GCC's call-graph dumper
-    (-fdump-ipa-cgraph) and return [(caller_id, callee_id), …].
-
-    • The compile step may fail for some files (missing headers, Kconfig
-      defines).  We ignore those and keep going.
-    • Each dump file is named  *.c.###r.*.ipa-cgraph*  in GCC 10+.
+    Build under worktree/src (where the Makefile lives, with your
+    -fdump-ipa-cgraph flags) and return all (caller, callee) pairs
+    from the generated .ipa-cgraph dumps.
     """
     edges: List[Tuple[str, str]] = []
+    current = None
 
-    # 1. Compile translation units just enough to emit cgraph dumps
-    for c_file in worktree.rglob("*.c"):
-        try:
-            run(
-                [
-                    "gcc",
-                    "-w",                   # quiet
-                    "-c", str(c_file),
-                    "-o", os.devnull,
-                    "-fdump-ipa-cgraph",
-                    "-fno-ipa-icf",         # avoid cross-file folding
-                ],
-                cwd=worktree,
-            )
-        except subprocess.CalledProcessError:
-            # kernel sources often need special flags; skip failures
-            continue
+    # 0. Purge any stale dumps
+    for old in worktree.rglob("*.cgraph"):
+        old.unlink(missing_ok=True)
 
-    # 2. Parse all generated *.ipa-cgraph* files
-    for dump in worktree.rglob("*.ipa-cgraph"):
+    # 1. Select build directory
+    build_dir = worktree / "src"
+    if not (build_dir / "Makefile").exists():
+        build_dir = worktree
+
+    # 2. Kick off a full rebuild there; ignore errors
+    try:
+        run(
+            ["make", "-B", f"-j{os.cpu_count() or 8}"],
+            cwd=build_dir,
+        )
+    except subprocess.CalledProcessError:
+        pass  # dumps may still have been generated
+
+    # 3. Harvest and clean up the dumps
+    for dump in worktree.rglob("*.cgraph"):
         try:
             for line in dump.read_text().splitlines():
-                m = CGRAPH_RE.match(line)
+                # 1) detect a definition header and remember its name
+                hdr = re.match(r'^([\w\.\*]+)(?:/\d+)?\s+\(([\w\.\*]+)\)', line)
+                if hdr:
+                    # use the *symbol* before the slash as the function name
+                    current = hdr.group(1)
+                    continue
+
+                # 2) catch explicit arrow edges
+                m = EDGE_RE.match(line)
                 if m:
-                    caller, callee = m.groups()
-                    # Use "?::" pseudo-path for ID consistency with Phase 1
-                    edges.append((f"?::{caller}", f"?::{callee}"))
+                    print('match edges', line)
+                    edges.append((m.group(1), m.group(2)))
+                    continue
+
+                # 3) catch Called by / Calls lists
+                m_lst = LIST_RE.match(line)
+                if m_lst and current:
+                    kind, rest = m_lst.groups()
+                    # find only symbol/ID tokens
+                    for sym in SYMBOL_RE.findall(rest):
+                        if kind == "Called by":
+                            # sym calls current
+                            edges.append((sym, current))
+                        else:
+                            # current calls sym
+                            edges.append((current, sym))
+
         finally:
-            dump.unlink(missing_ok=True)   # keep workspace clean
+            dump.unlink(missing_ok=True)
 
     return edges
 
@@ -271,7 +293,7 @@ def extract_or_load_cg(repo: Path, commit: str) -> Dict:
         ir = build_cg_ir(edges, commit)
         cp.parent.mkdir(parents=True, exist_ok=True)
         cp.write_text(json.dumps(ir))
-        print(f"[INFO] cached CG (Clang) for {commit[:8]} → {cp.name}")
+        print(f"[INFO] cached CG for {commit[:8]} → {cp.name}")
         return ir
     finally:
         cleanup_worktree(repo, wt)
@@ -353,22 +375,34 @@ def pretty_diff_cg(result: Dict, dep_flags: Dict[str,List[Edge]]) -> None:
 def main() -> None:
     p = argparse.ArgumentParser(description="Kernel‑module analyzer (Step‑0 + P1 + P2)")
     p.add_argument("repo", type=Path, help="Path to git repo")
-    p.add_argument("--target", default="HEAD", help="Commit/branch to analyze")
+    p.add_argument("--target",   default="HEAD",     help="Commit/branch to analyze")
+    p.add_argument("--baseline", default="baseline", help="Commit/branch to diff against (default: 'baseline')")
+    p.add_argument("--clean-ir", action="store_true",
+                   help="Delete cached IR for baseline and target commits before analysis")
     args = p.parse_args()
 
     repo = args.repo.resolve()
     if not (repo / ".git").exists():
         sys.exit(f"{repo} is not a git repository")
 
-    # Step‑0
-    root_sha = discover_root_commit(repo)
-    write_baseline_info(root_sha)
-
     # Normalize shas
     target_sha = run(["git", "rev-parse", args.target], cwd=repo)
+    # Resolve baseline / target SHAs up‑front
+    baseline_sha = run(["git", "rev-parse", args.baseline], cwd=repo)
+    target_sha   = run(["git", "rev-parse", args.target],   cwd=repo)
 
+    # Optional: purge cached IR so we start fresh
+    if args.clean_ir:
+        for sha in (baseline_sha, target_sha):
+            for ver in (F1_VER, CG_VER):
+                cache_path(ver, sha).unlink(missing_ok=True)
+
+    # Step‑0
+    # root_sha = discover_root_commit(repo)
+
+    write_baseline_info(baseline_sha)
     # Phase‑1
-    base_f1 = extract_or_load_f1(repo, root_sha)
+    base_f1 = extract_or_load_f1(repo, baseline_sha)
     tgt_f1  = extract_or_load_f1(repo, target_sha)
     added, removed, sigchg = diff_f1(base_f1, tgt_f1)
     pretty_diff_f1(added, removed, sigchg, tgt_f1)
@@ -377,7 +411,7 @@ def main() -> None:
     alias = build_alias_map(base_f1, tgt_f1)
 
     # Phase‑2
-    base_cg = extract_or_load_cg(repo, root_sha)
+    base_cg = extract_or_load_cg(repo, baseline_sha)
     tgt_cg  = extract_or_load_cg(repo, target_sha)
     cg_res  = diff_cg(base_cg, tgt_cg, alias)
 

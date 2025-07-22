@@ -11,7 +11,7 @@
 #include "hws_interrupt.h"
 #include "hws_video.h"
 
-#define DRV_NAME "HWS driver
+#define DRV_NAME "HWS driver"
 #define HWS_REG_DEVICE_INFO   0x0000
 #define HWS_REG_DEC_MODE      0x0004
 
