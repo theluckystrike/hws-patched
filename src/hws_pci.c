@@ -740,6 +740,6 @@ module_init(pcie_hws_init);
 module_exit(pcie_hws_exit);
 
 MODULE_DESCRIPTION(DRV_NAME);
+MODULE_AUTHOR("Ben Hoff <hoff.benjamin.k@gmail.com>");
 MODULE_AUTHOR("Sales <sales@avmatrix.com>");
 MODULE_LICENSE("GPL");
-MODULE_VERSION("1.0");
