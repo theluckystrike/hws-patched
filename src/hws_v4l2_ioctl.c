@@ -498,188 +498,132 @@ int hws_vidioc_g_ctrl(struct file *file, void *fh,
     return 0;
 }
 
-int hws_vidioc_s_ctrl(struct file *file, void *fh, struct v4l2_control *a)
+int hws_vidioc_s_ctrl(struct file *file, void *fh, struct v4l2_control *ctrl)
 {
 	struct hws_video *videodev = video_drvdata(file);
-	struct v4l2_control *ctrl = a;
 	struct v4l2_queryctrl *found_ctrl;
-	int ret = -EINVAL;
-	if (ctrl == NULL) {
-		printk("%s(ch-%d)ctrl=NULL\n", __func__, videodev->index);
-		return ret;
-	}
-	//printk( "%s(ch-%d ctrl->id =%X )\n", __func__,videodev->index,ctrl->id);
-	found_ctrl = find_ctrl(ctrl->id);
-	if (found_ctrl) {
-		switch (found_ctrl->type) {
-		case V4L2_CTRL_TYPE_INTEGER:
-			if (ctrl->value >= found_ctrl->minimum ||
-			    ctrl->value <= found_ctrl->maximum) {
-				//printk( "%s(ch-%d ctrl->value =%X )\n", __func__,videodev->index,ctrl->value);
-				switch (ctrl->id) {
-				case V4L2_CID_BRIGHTNESS:
-					videodev->m_Curr_Brightness =
-						ctrl->value;
-					break;
-				case V4L2_CID_CONTRAST:
-					videodev->m_Curr_Contrast = ctrl->value;
-					break;
-				case V4L2_CID_HUE:
-					videodev->m_Curr_Hue = ctrl->value;
-					break;
-				case V4L2_CID_SATURATION:
-					videodev->m_Curr_Saturation =
-						ctrl->value;
-					break;
+	int val
 
-				default:
-					break;
-				}
-				//printk( "%s(Name:%s value =%X )\n", __func__,found_ctrl->name,ctrl->value);
-				ret = 0;
-			} else {
-				//error
-				ret = -ERANGE;
-				printk("control %s out of range\n",
-				       found_ctrl->name);
-			}
-			break;
-		default: {
-			//error
-			printk("control type %d not handled\n",
-			       found_ctrl->type);
-		}
-		}
+	if (!ctrl) {
+		return -EINVAL;
 	}
-	//printk( "%s(ret=%d)\n", __func__,ret);
-	return ret;
+
+	found_ctrl = find_ctrl(ctrl->id);
+	if (!found_ctrl)
+		return -EINVAL;
+
+	if (qc->type != V4L2_CTRL_TYPE_INTEGER)
+		return -EINVAL;
+
+
+	val = ctrl->value;
+	/* Range check */
+	if (val < found_ctrl->minimum || val > found_ctrl->maximum)
+		return -ERANGE;
+
+	switch (ctrl->id) {
+	case V4L2_CID_BRIGHTNESS:
+		videodev->m_Curr_Brightness =
+			ctrl->value;
+		break;
+	case V4L2_CID_CONTRAST:
+		videodev->m_Curr_Contrast = ctrl->value;
+		break;
+	case V4L2_CID_HUE:
+		videodev->m_Curr_Hue = ctrl->value;
+		break;
+	case V4L2_CID_SATURATION:
+		videodev->m_Curr_Saturation =
+			ctrl->value;
+		break;
+
+	default:
+		return -EINVAL;
+	}
+	return 0;
 }
 
 int hws_vidioc_queryctrl(struct file *file, void *fh,
-				struct v4l2_queryctrl *a)
+				struct v4l2_queryctrl *qc)
 {
 	struct hws_video *videodev = video_drvdata(file);
+	u32 id = qc->id & ~V4L2_CTRL_FLAG_NEXT_CTRL;
+	bool next =  qc->id & V4L2_CTRL_FLAG_NEXT_CTRL;
 	struct v4l2_queryctrl *found_ctrl;
-	unsigned int id;
-	unsigned int mask_id;
-	int ret = -EINVAL;
-	//printk( "%s(ch-%d)\n", __func__,videodev->index);
-	//printk( "%s(ctrl-id=0x%X[0x%X] )\n", __func__,a->id,(a->id)&(~V4L2_CTRL_FLAG_NEXT_CTRL));
-	//-----------------------------------------------
-	id = a->id & (~V4L2_CTRL_FLAG_NEXT_CTRL);
-	mask_id = a->id & V4L2_CTRL_FLAG_NEXT_CTRL;
-	if (mask_id == V4L2_CTRL_FLAG_NEXT_CTRL) {
+
+	if (next) {
 		if (id == 0) {
-			videodev->queryIndex = 0;
-			found_ctrl = find_ctrlByIndex(videodev->queryIndex);
-			*a = *found_ctrl;
-			//a->id = a->id|V4L2_CTRL_FLAG_NEXT_CTRL;
-			//printk("queryctrl[1] Get [%s][0x%X]\n",found_ctrl->name,a->id);
-			ret = 0;
+			videodev->query_index = 0;
 		} else {
 			videodev->queryIndex++;
-			found_ctrl = find_ctrlByIndex(videodev->queryIndex);
-			if (found_ctrl != NULL) {
-				*a = *found_ctrl;
-				//a->id = a->id|V4L2_CTRL_FLAG_NEXT_CTRL;
-				//printk("queryctrl[2] Get [%s][0x%X]\n",found_ctrl->name,a->id);
-				ret = 0;
-			} else {
-				*a = g_no_ctrl;
-				ret = -EINVAL;
-			}
 		}
+		ctrl = find_ctrl_by_index(vid->query_index);
 
 	} else {
 		found_ctrl = find_ctrl(id);
-		if (NULL != found_ctrl) {
-			*a = *found_ctrl;
-			//printk("queryctrl[3] Get [%s][0x%X]\n",found_ctrl->name,a->id);
-			ret = 0;
-		} else {
-			*a = g_no_ctrl;
-			ret = -EINVAL;
-		}
 	}
-	return ret;
-}
-#if 0
-static int hws_vidioc_streamon(struct file *file, void *priv, enum v4l2_buf_type i)
-{
-	//struct hws_video *videodev = video_drvdata(file);
-	//printk( "%s(ch-%d)\n", __func__,videodev->index);
-#if 0
-	StartVideoCapture(videodev->dev,videodev->index);
-#endif 
-	return(vb2_ioctl_streamon(file,priv,i));
-	
-}
-static int hws_vidioc_streamoff(struct file *file, void *priv, enum v4l2_buf_type i)
-{
-	//struct hws_video *videodev = video_drvdata(file);
-	//printk( "%s(ch-%d)\n", __func__,videodev->index);
-#if 0
-	StopVideoCapture(videodev->dev,videodev->index);
-#endif 
-	return(vb2_ioctl_streamoff(file,priv,i));
+	if (!ctrl) {
+		*qc = g_no_ctrl;
+		return -EINVAL
+	}
+	*qc = *ctrl
+	if (next)
+		qc->id |= V4L2_CTRL_FLAG_NEXT_CTRL;
 
+	return 0;
 }
-#endif
 
 int hws_vidioc_enum_frameintervals(struct file *file, void *fh,
 					  struct v4l2_frmivalenum *fival)
 {
-	//struct hws_video *videodev = video_drvdata(file);
-	int Index;
-	int FrameRate;
-	v4l2_model_timing_t *pModeTiming;
-	Index = fival->index;
-	//printk( "%s(CH-%d) FrameIndex =%d \n", __func__,videodev->index,Index);
-	if (Index < 0 || Index >= num_framerate_controls) {
+	unsigned int index;
+	unsigned int fps;
+	v4l2_model_timing_t *timing;
+	index = fival->index;
+	if (index >= num_framerate_controls)
 		return -EINVAL;
-	}
 
-	FrameRate = v4l2_model_get_support_framerate(Index);
-	if (FrameRate == -1)
+	fps = v4l2_model_get_support_framerate(Index);
+
+	if (!fps)
 		return -EINVAL;
-	pModeTiming = Get_input_framesizeIndex(fival->width, fival->height);
-	if (pModeTiming == NULL)
+
+	timing = Get_input_framesizeIndex(fival->width, fival->height);
+	if (!timing)
 		return -EINVAL;
 
 	fival->type = V4L2_FRMIVAL_TYPE_DISCRETE;
-	fival->discrete.numerator = 1000;
-	fival->discrete.denominator = FrameRate * 1000;
-	//printk( "%s FrameIndex=%d W=%d H=%d  FrameRate=%d \n", __func__,Index,fival->width,fival->height,FrameRate);
+	fival->discrete.numerator = 1;
+	fival->discrete.denominator = fps;
 	return 0;
 }
 
-int hws_vidioc_s_parm(struct file *file, void *fh, struct v4l2_streamparm *a)
+int hws_vidioc_s_parm(struct file *file, void *fh, struct v4l2_streamparm *param)
 {
 	struct hws_video *videodev = video_drvdata(file);
-	int io_frame_rate;
-	int in_frame_rate;
-	//int io_widht;
-	//int io_hight;
-	//int io_index;
-	v4l2_model_timing_t *p_SupportmodeTiming;
-	io_frame_rate = a->parm.capture.timeperframe.denominator /
-			a->parm.capture.timeperframe.numerator;
-	//io_index = a->parm.capture.timeperframe.index;
-	//printk( "%s(CH-%d) io_index =%d \n", __func__,videodev->index,io_index);
-	p_SupportmodeTiming = v4l2_model_get_support_videoformat(
-		videodev->current_out_size_index);
-	if (p_SupportmodeTiming == NULL)
+	unsigned int req_fps;
+	unsigned int sup_fps;
+	struct v4l2_captureparm *cap = &parm->parm.capture;
+	v4l2_model_timing_t *timing;
+
+	if (parm->type != V4L2_BUF_TYPE_VIDEO_CAPTURE)
 		return -EINVAL;
-	in_frame_rate = p_SupportmodeTiming->refresh_rate;
-	//printk( "%s(ch-%d)io_frame_rate =%d  in_frame_rate =%d \n", __func__,videodev->index,io_frame_rate,in_frame_rate);
+
+	if (cap->timeperframe.numerator == 0)
+		return -EINVAL;
+
+	req_fps = cap->timeperframe.denominator /
+	          cap->timeperframe.numerator;
+
+	timing = v4l2_model_get_support_videoformat(
+		videodev->current_out_size_index);
+
+	if (!timing)
+		return -EINVAL;
+
+	sup_fps = timing->refresh_rate;
+	cap->timeperframe.numerator   = 1;
+	cap->timeperframe.denominator = sup_fps;
+
 	return 0;
 }
-#if 0
-static int hws_vidioc_dqbuf(struct file *file, void *priv, struct v4l2_buffer *p)
-{
-   struct hws_video *videodev = video_drvdata(file);
-   printk( "%s(ch-%d)\n", __func__,videodev->index);
-	//vb2_ioctl_dqbuf
-    return vb2_ioctl_dqbuf(file,priv,p);
-}
-#endif
