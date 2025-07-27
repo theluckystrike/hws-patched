@@ -200,8 +200,7 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
     if (!hws_dev->bar0_base) {
         dev_err(&pci_dev->dev, "pci_iomap failed\n");
         err = -ENOMEM;
-        // FIXME
-        goto ;
+        goto err_release_regions;
     }
 
 
@@ -210,8 +209,11 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
 
 	ret = probe_scan_for_msi(hws_dev, pci_dev);
 
-	if (ret < 0)
+	if (ret < 0) {
+        dev_err(&pci_dev->dev, "%s: MSI setup failed: %d\n",
+                __func__, ret);
 		goto disable_msi;
+	}
 
 #ifdef CONFIG_ARCH_TI816X
 	pcie_set_readrq(pci_dev, 128);
@@ -221,8 +223,11 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
 	hws_dev->audio_w = NULL;
 
 	ret = hws_irq_setup(hws_dev, pci_dev);
-	if (ret)
-		goto err_register;
+	if (ret) {
+        dev_err(&pci_dev->dev, "%s: IRQ setup failed: %d\n",
+                __func__, ret);
+		goto err_disable_msi;
+	}
 
 	pci_set_drvdata(pci_dev, hws_dev);
 	read_chip_id(hws_dev);
@@ -230,15 +235,15 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
     for (i = 0; i < dev->max_channels; i++) {
         ret = hws_video_init_channel(dev, i);
         if (ret)
-            goto err_cleanup;
+            goto err_cleanup_channels;
         ret = hws_audio_init_channel(dev, i);
         if (ret)
-            goto err_cleanup;
+            goto err_cleanup_channels;
     }
 
 	ret = hws_dma_mem_alloc(hws_dev);
 	if (ret != 0) {
-		goto err_mem_alloc;
+		goto err_free_dma;
 	}
 
 	hws_init_video_sys(hws_dev, 0);
@@ -273,13 +278,17 @@ err_destroy_wq:
 err_stop_thread:
         if (!IS_ERR_OR_NULL(hws_dev->main_task))
                 kthread_stop(hws_dev->main_task);
+	// NOTE: GOOD BELOW HERE
 err_free_dma:
         hws_dma_mem_free(hws);
 err_cleanup_channels:
-        hws_audio_cleanup_channels(hws);
-        hws_video_cleanup_channels(hws);
-err_irq:
-        hws_free_irqs(hws_dev);
+    /* undo channels [0 .. i-1] */
+    for (j = i - 1; j >= 0; j--) {
+        hws_video_cleanup_channel(hws_dev, j);
+	hws_audio_cleanup_channel(hws_dev, j);
+    }
+err_disable_msi:
+    hws_disable_msi(hws_dev);
 err_unmap_bar:
         pci_iounmap(pdev, hws->bar0_base);
 err_release_regions:
@@ -471,6 +480,40 @@ static int hws_video_init_channel(struct hws_pcie_dev *pdev, int ch)
 	return 0;
 }
 
+static void hws_video_cleanup_channel(struct hws_pcie_dev *pdev, int ch)
+{
+    struct hws_video *vid = &pdev->video[ch];
+
+    /* 1) Free all V4L2 controls */
+    v4l2_ctrl_handler_free(&vid->control_handler);
+    // FIXME: this only handles the memory created by init channel
+
+    /*
+     * 2) If you ever allocate a DMA buffer later (via
+     *    dma_alloc_coherent), free it here:
+     *
+     * if (vid->buf_virt) {
+     *     dma_free_coherent(pdev->pdev,
+     *                       vid->buf_size_bytes,
+     *                       vid->buf_virt,
+     *                       vid->buf_phys_addr);
+     *     vid->buf_virt       = NULL;
+     *     vid->buf_phys_addr  = 0;
+     *     vid->buf_size_bytes = 0;
+     * }
+     *
+     * 3) Any pending work on your capture queue list should be
+     *    drained or cancelled here.  For example, if you ever
+     *    queue work to a WQ you might do:
+     *
+     *    flush_workqueue(vid->your_workqueue);
+     *
+     * 4) Note: kernel mutexes, spinlocks and list heads
+     *    do not need explicit “destroy” calls.
+     */
+}
+
+
 
 /*  Initialise one audio channel                                       */
 /* ------------------------------------------------------------------ */
@@ -549,7 +592,46 @@ static int hws_audio_init_channel(struct hws_pcie_dev *pdev, int ch)
 	return 0;
 }
 
+static void hws_audio_cleanup_channel(struct hws_pcie_dev *pdev, int ch)
+{
+    struct hws_audio *aud = &pdev->audio[ch];
+    int q;
 
+    /* ── kill the tasklet (bottom-half) ───────────────────────── */
+    tasklet_kill(&pdev->dpc_audio_tasklet[ch]);
+
+    /* ── unregister & free the ALSA card ───────────────────────── */
+    if (aud->sound_card) {
+        snd_card_free(aud->sound_card);
+        aud->sound_card = NULL;
+    }
+
+    /* ── free DMA buffer if allocated ──────────────────────────── */
+    if (aud->data_buf) {
+        /* if you used pci_alloc_consistent / dma_alloc_coherent: */
+        pci_free_consistent(pdev->pdev,
+                            aud->buf_size_bytes,
+                            aud->data_buf,
+                            aud->buf_phys_addr);
+        aud->data_buf = NULL;
+        aud->buf_phys_addr = 0;
+        aud->buf_size_bytes = 0;
+    }
+
+    /* ── free resampling workspace ─────────────────────────────── */
+    kfree(aud->resampled_buffer);
+    aud->resampled_buffer = NULL;
+    aud->resampled_buffer_size = 0;
+
+    /* ── clear per-queue info ──────────────────────────────────── */
+    for (q = 0; q < MAX_AUDIO_QUEUE; q++) {
+        aud->chan_info.audio_buf[q] = NULL;
+        aud->chan_info.status[q].lock = MEM_UNLOCK;
+    }
+
+    /* ── (Optional) zero the struct so repeated init/cleanup safe ─ */
+    memset(aud, 0, sizeof(*aud));
+}
 
 static struct hws_pcie_dev *hws_alloc_dev_instance(struct pci_dev *pdev)
 {
@@ -648,6 +730,16 @@ static int probe_scan_for_msi(struct hws_pcie_dev *hws, struct pci_dev *pdev)
     hws->msix_enabled = false;
     dev_info(&pdev->dev, "using legacy INTx interrupts\n");
     return 0;
+}
+
+static void hws_disable_msi(struct hws_pcie_dev *hws_dev)
+{
+    /* only free if we actually enabled MSI‑X or MSI */
+    if (hws_dev->msix_enabled || hws_dev->msi_enabled) {
+        pci_free_irq_vectors(hws_dev->pdev);
+        hws_dev->msix_enabled = false;
+        hws_dev->msi_enabled  = false;
+    }
 }
 
 static int hws_irq_setup(struct hws_pcie_dev *hws)
