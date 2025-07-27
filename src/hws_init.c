@@ -64,28 +64,6 @@ void check_card_status(struct hws_pcie_dev *pdx)
 	}
 }
 
-static void hws_get_video_param(struct hws_pcie_dev *dev, int index)
-{
-	int width, height;
-
-	width = dev->video[index].queue_status[0].width;
-	height = dev->video[index].queue_status.height;
-
-	dev->video[index].current_out_pixfmt = 0;
-	dev->video[index].current_out_size_index = 0;
-	dev->video[index].current_out_width = width;
-	dev->video[index].curren_out_height = height;
-	dev->video[index].current_out_framerate = 60;
-	dev->video[index].interlaced = false;
-}
-
-void hws_adapters_init(struct hws_pcie_dev *dev)
-{
-	int i;
-	for (i = 0; i < MAX_VID_CHANNELS; i++) {
-		hws_get_video_param(dev, i);
-	}
-}
 
 void StopDevice(struct hws_pcie_dev *pdx)
 { // StopDevice
