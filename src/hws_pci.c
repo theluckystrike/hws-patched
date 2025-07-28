@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
-#include "hws_pci.h"
+#include <linux/pci.h>
+#include <linux/types.h>
 
 #include <media/v4l2-ctrls.h>
 
@@ -24,6 +25,16 @@
 
 #define MAX_MM_VIDEO_SIZE     (1920 * 1080 * 2)
 #define MAX_DMA_AUDIO_PK_SIZE (128 * 16 * 4)
+
+
+#define MAKE_ENTRY( __vend, __chip, __subven, __subdev, __configptr) {	\
+	.vendor		= (__vend),					\
+	.device		= (__chip),					\
+	.subvendor	= (__subven),					\
+	.subdevice	= (__subdev),					\
+	.driver_data	= (unsigned long) (__configptr)			\
+}
+
 
 static const struct pci_device_id hws_pci_table[] = {
 	MAKE_ENTRY(0x8888, 0x9534, 0x8888, 0x0007, NULL),
@@ -167,26 +178,20 @@ static int main_ks_thread_handle(void *data)
     return 0;
 }
 
-static void hws_get_video_param(struct hws_pcie_dev *dev, int index)
-{
-	int width, height;
-
-	width = dev->video[index].queue_status[0].width;
-	height = dev->video[index].queue_status.height;
-
-	dev->video[index].current_out_pixfmt = 0;
-	dev->video[index].current_out_size_index = 0;
-	dev->video[index].current_out_width = width;
-	dev->video[index].curren_out_height = height;
-	dev->video[index].current_out_framerate = 60;
-	dev->video[index].interlaced = false;
-}
-
 static void hws_adapters_init(struct hws_pcie_dev *dev)
 {
-	int i;
-	for (i = 0; i < MAX_VID_CHANNELS; i++) {
-		hws_get_video_param(dev, i);
+	int index;
+	int width, height;
+	for (index = 0; index < MAX_VID_CHANNELS; index++) {
+		width = dev->video[index].queue_status[0].width;
+		height = dev->video[index].queue_status.height;
+
+		dev->video[index].current_out_pixfmt = 0;
+		dev->video[index].current_out_size_index = 0;
+		dev->video[index].current_out_width = width;
+		dev->video[index].curren_out_height = height;
+		dev->video[index].current_out_framerate = 60;
+		dev->video[index].interlaced = false;
 	}
 }
 
@@ -269,6 +274,7 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
 		goto err_free_dma;
 	}
 
+	// FIXME: `EnableAudioCapture` sub method and `hws_write32`
 	hws_init_video_sys(hws_dev, 0);
 
     // NOTE: there are two loops, the `video_data_process` and this where we have periodic checks
@@ -285,23 +291,19 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
 
     // FIXME: This func sucks
 	if (hws_video_register(hws_dev))
-        // FIXME: not sure this goto makes sense
-		goto err_mem_alloc;
+		goto err_destroy_wq;
 
     // FIXME: This func sucks
 	if (hws_audio_register(hws_dev))
         // FIXME: not sure this goto makes sense
-		goto err_mem_alloc;
+		goto err_destroy_wq;
 	return 0;
-err_unregister_video:
-        hws_video_unregister(hws);
 err_destroy_wq:
         destroy_workqueue(hws->video_wq);
         destroy_workqueue(hws->audio_wq);
 err_stop_thread:
         if (!IS_ERR_OR_NULL(hws_dev->main_task))
                 kthread_stop(hws_dev->main_task);
-	// NOTE: GOOD BELOW HERE
 err_free_dma:
         hws_dma_mem_free(hws);
 err_cleanup_channels:
