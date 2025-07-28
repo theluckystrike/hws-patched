@@ -197,11 +197,17 @@ static void hws_adapters_init(struct hws_pcie_dev *dev)
 
 static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id)
 {
-	struct hws_pcie_dev *hws_dev= NULL;
+	struct hws_pcie_dev *hws_dev;
 	int err = 0, ret = -ENODEV;
 	int j, i;
 
 	hws_dev = hws_alloc_dev_instance(pci_dev);
+
+	if (!hws_dev) {
+		dev_err(&pci_dev->dev, "%s: out of memory\n", __func__);
+		return -ENOMEM;
+	}
+
 	hws_dev->pdev = pci_dev;
 
 	hws_dev->device_id = hws_dev->pci_dev->device;
@@ -240,7 +246,7 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
 	if (ret < 0) {
         dev_err(&pci_dev->dev, "%s: MSI setup failed: %d\n",
                 __func__, ret);
-		goto disable_msi;
+		goto err_disable_msi;
 	}
 
 #ifdef CONFIG_ARCH_TI816X
@@ -274,6 +280,7 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
 		goto err_free_dma;
 	}
 
+	// in `hws_video_pipeline.c`
 	// FIXME: `EnableAudioCapture` sub method and `hws_write32`
 	hws_init_video_sys(hws_dev, 0);
 
@@ -283,13 +290,25 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
    
     // FIXME: figure out if we can check update_hpd_status early and exit fast
     hws->main_task = kthread_run(main_ks_thread_handle, (void *)hws_dev, "start_ks_thread_task")
-
+    if (IS_ERR(hws_dev->main_task)) {
+            ret = PTR_ERR(hws_dev->main_task);
+            hws_dev->main_task = NULL;
+            goto err_free_dma;
+    }
 	// NOTE: loops around `hws_get_video_param`, which sets values based on vcap status height/width
 	hws_adapters_init(hws_dev);
-	hws_dev->video_wq = create_singlethread_workqueue("hws");
-	hws_dev->audio_wq = create_singlethread_workqueue("hws-audio");
 
-    // FIXME: This func sucks
+	hws_dev->video_wq = create_singlethread_workqueue("hws");
+	    if (!hws_dev->video_wq) {
+		    ret = -ENOMEM;
+		    goto err_stop_thread;
+	    }
+	hws_dev->audio_wq = create_singlethread_workqueue("hws-audio");
+	    if (!hws_dev->audio_wq) {
+		    ret = -ENOMEM;
+		    goto err_destroy_video_wq;
+	    }
+
 	if (hws_video_register(hws_dev))
 		goto err_destroy_wq;
 
