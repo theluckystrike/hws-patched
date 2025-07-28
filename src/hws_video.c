@@ -56,9 +56,9 @@ static int hws_release(struct file *file)
 //----------------------------
 static const struct v4l2_file_operations hws_fops = {
 	.owner = THIS_MODULE,
-	.open = hws_open, //v4l2_fh_open,
-	.release = hws_release, //vb2_fop_release,
-	.read = hws_read, //vb2_fop_read,
+	.open = hws_open,
+	.release = hws_release,
+	.read = hws_read,
 	.poll = vb2_fop_poll,
 	.unlocked_ioctl = video_ioctl2,
 	.mmap = vb2_fop_mmap,
@@ -227,10 +227,9 @@ static const struct vb2_ops hwspcie_video_qops = {
 
 int hws_video_register(struct hws_pcie_dev *dev)
 {
+	int i, err;
 	struct video_device *vdev;
 	struct vb2_queue *q;
-	int i;
-	int err = -1;
 
 	err = devm_v4l2_device_register(&dev->pdev->dev, &dev->v4l2_dev);
 	if (err) {
@@ -239,68 +238,64 @@ int hws_video_register(struct hws_pcie_dev *dev)
 		return err;
 	}
 
-	//----------------------------------------------------
 	for (i = 0; i < dev->cur_max_video_ch; i++) {
-		vdev = &(dev->video[i].video_device);
-		q = &(dev->video[i].buffer_queue);
-		if (NULL == vdev) {
-			printk(KERN_ERR " video_device_alloc failed !!!!! \n");
-			goto fail;
+		struct hws_video *hws = &dev->video[i];
+
+		/* init channel state */
+		hws->channel_index      = i;
+		hws->parent             = dev;
+		hws->pixel_format       = V4L2_PIX_FMT_YUYV;
+		hws->current_brightness = BrightnessDefault;
+		hws->current_contrast   = ContrastDefault;
+		hws->current_saturation = SaturationDefault;
+		hws->current_hue        = HueDefault;
+
+		/* initialise locks & lists */
+		mutex_init(&hws->state_lock);
+		mutex_init(&hws->capture_queue_lock);
+		spin_lock_init(&hws->irq_lock);
+		INIT_LIST_HEAD(&hws->capture_queue);
+
+		/* setup video_device */
+		vdev = devm_video_device_alloc(&dev->pdev->dev, 0);
+		if (!vdev) {
+		    dev_err(&dev->pdev->dev, "video_device_alloc failed\n");
+		    err = -ENOMEM;
+		    goto err_unreg_nodes;
 		}
-		dev->video[i].channel_index = i;
-		dev->video[i].parent = dev;
-		dev->video[i].tv_standard = V4L2_STD_NTSC_M;
-		dev->video[i].pixel_format = V4L2_PIX_FMT_YUYV;
+		hws->vdev = vdev;
 
-		dev->video[i].current_brightness = BrightnessDefault;
-		dev->video[i].current_contrast = ContrastDefault;
-		dev->video[i].current_saturation = SaturationDefault;
-		dev->video[i].current_hue = HueDefault;
-
-		/* ---------- initialise locks & lists ---------- */
-		mutex_init(&(dev->video[i].state_lock));
-		mutex_init(&(dev->video[i].capture_queue_lock));
-		spin_lock_init(&dev->video[i].irq_lock);
-		INIT_LIST_HEAD(&dev->video[i].capture_queue);
-
-		/* ---------- fill in struct video_device ------- */
-		memset(vdev, 0, sizeof(*vdev));
 		vdev->v4l2_dev     = &dev->v4l2_dev;
-		vdev->fops = &hws_fops;
-		vdev->ioctl_ops = &hws_ioctl_fops;
-		vdev->device_caps = V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_STREAMING;
-
-		vdev->lock = &(dev->video[i].state_lock);
-		vdev->ctrl_handler = &(dev->video[i].control_handler);
-		vdev->vfl_dir = VFL_DIR_RX;
-		vdev->release = video_device_release_empty;
+		vdev->fops         = &hws_fops;
+		vdev->ioctl_ops    = &hws_ioctl_fops;
+		vdev->device_caps  = V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_STREAMING;
+		vdev->lock         = &hws->state_lock;
+		vdev->ctrl_handler = &hws->control_handler;
+		vdev->vfl_dir      = VFL_DIR_RX;
+		vdev->release      = video_device_release_empty;
+		video_set_drvdata(vdev, hws);
 		video_device_set_name(vdev, "%s-hdmi%d",
 				      KBUILD_MODNAME, i);
 
-		video_set_drvdata(vdev, &dev->video[i]);
+		/* Setup vb2 queue with designated initializer */
+		q = &hws->buffer_queue;
 
-		memset(q, 0, sizeof(*q));
-		q->type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+		// FIXME: Figure out if the hw only supports 4 GB RAM
+		*q = (struct vb2_queue) {
+			.type            = V4L2_BUF_TYPE_VIDEO_CAPTURE,
+			.io_modes        = VB2_READ | VB2_MMAP | VB2_USERPTR,
+			.gfp_flags       = GFP_DMA32,
+			.drv_priv        = hws,
+			.buf_struct_size = sizeof(struct hwsvideo_buffer),
+			.ops             = &hwspcie_video_qops,
+			.mem_ops         = &vb2_vmalloc_memops,
+			.timestamp_flags = V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC,
+			.lock            = &hws->capture_queue_lock,
+			.dev             = &dev->pdev->dev,
+		};
 
-        // TODO: would love to enable VB2_DMABUF here
-		q->io_modes = VB2_READ | VB2_MMAP | VB2_USERPTR;
-
-        // FIXME: Figure out if the hw only supports 4 GB RAM
-		q->gfp_flags = GFP_DMA32;
-		//q->min_buffers_needed = 2;
-		q->drv_priv = &(dev->video[i]);
-		q->buf_struct_size = sizeof(struct hwsvideo_buffer);
-		q->ops = &hwspcie_video_qops;
-
-		//q->mem_ops = &vb2_dma_contig_memops;
-		//q->mem_ops = &vb2_dma_sg_memops;
-		q->mem_ops = &vb2_vmalloc_memops;
-
-		q->timestamp_flags = V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC;
-
-		q->lock = &(dev->video[i].capture_queue_lock);
-		q->dev = &(dev->pdev->dev);
 		vdev->queue = q;
+
 		err = vb2_queue_init(q);
 		if (err) {
 			dev_err(&dev->pdev->dev,
@@ -308,7 +303,7 @@ int hws_video_register(struct hws_pcie_dev *dev)
 			goto err_unreg_nodes;
 		}
 
-		INIT_WORK(&dev->video[i].video_work, video_data_process);
+		INIT_WORK(&hws->video_work, video_data_process);
 		err = video_register_device(vdev, VFL_TYPE_VIDEO, -1);
 		if (err) {
 			dev_err(&dev->pdev->dev,
@@ -317,10 +312,13 @@ int hws_video_register(struct hws_pcie_dev *dev)
 			goto err_unreg_nodes;
 		}
 	}
+
 	return 0;
 err_unreg_nodes:
-	while (--i >= 0)
-		video_unregister_device(&dev->video[i].video_device);
-
-	return err;
+    while (--i >= 0) {
+        struct hws_video *hws = &dev->video[i];
+        vb2_queue_cleanup(&hws->buffer_queue);
+        video_unregister_device(hws->vdev);
+    }
+    return err;
 }

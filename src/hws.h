@@ -210,7 +210,6 @@ struct hws_dmabuf{
 | `video_lock`             | `state_lock`              | hws\_video                      |
 | `queue_lock`             | `capture_queue_lock`      | hws\_video                      |
 | `slock`                  | `irq_lock`                | hws\_video                      |
-| `std`                    | `tv_standard`             | hws\_video                      |
 | `pixfmt`                 | `pixel_format`            | hws\_video                      |
 | `queryIndex`             | `query_index`             | hws\_video                      |
 | `index`                  | `channel_index`           | hws\_video                      |
@@ -266,7 +265,6 @@ struct hws_video {
 	spinlock_t				 irq_lock;			  /* ISR-side */
 
 	/* ───── format / standard ───── */
-	v4l2_std_id				 tv_standard;		  /* e.g. V4L2_STD_NTSC_M */
 	u32						 pixel_format;		  /* e.g. V4L2_PIX_FMT_YUYV */
 
 	/* ───── indices ───── */
