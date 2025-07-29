@@ -312,7 +312,7 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
 	if (hws_video_register(hws_dev))
 		goto err_destroy_wq;
 
-    // FIXME: This func sucks
+    // FIXME: `audio_data_process` which gets set/called from this func sucks
 	if (hws_audio_register(hws_dev))
         // FIXME: not sure this goto makes sense
 		goto err_destroy_wq;
