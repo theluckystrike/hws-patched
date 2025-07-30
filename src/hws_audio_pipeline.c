@@ -30,168 +30,170 @@ struct snd_pcm_hardware audio_pcm_hardware = {
 	.periods_max = 255,
 };
 
-int StartAudioCapture(struct hws_pcie_dev *pdx, int index)
+int hws_start_audio_capture(struct hws_pcie_dev *hws, unsigned int index)
 {
-	int j;
+	int j, ret;
 
-	if (pdx->m_bACapStarted[index] == 1) {
-		if (CheckAudioCapture(pdx, index) == 0) {
-			CheckCardStatus(pdx);
-			EnableAudioCapture(pdx, index, 1);
+	if (hws->cap_active[ch]) {
+		ret = hws_check_audio_capture(hws, ch);
+		if (ret == 0) {
+		    hws_check_card_status(hws);
+		    hws_enable_audio_capture(hws, ch, true);
 		}
-		//DbgPrint("Re StartAudioCapture =%d",index);
-		return -1;
+		dev_dbg(&hws->pdev->dev,
+			"audio channel %u already active, re‑enabled\n", ch);
+		return -EBUSY;
 	}
-	CheckCardStatus(pdx);
-	pdx->m_bAudioRun[index] = 1;
-	pdx->m_bAudioStop[index] = 0;
-	pdx->m_nAudioBufferIndex[index] = 0;
-	pdx->audio_data[index] = 0;
-	pdx->m_nRDAudioIndex[index] = 0;
-	for (j = 0; j < MAX_AUDIO_QUEUE; j++) {
-		pdx->m_AudioInfo[index].pStatusInfo[j].byLock = MEM_UNLOCK;
-	}
-	pdx->m_AudioInfo[index].dwisRuning = 1;
-	EnableAudioCapture(pdx, index, 1);
-	return 0;
+    /* Make sure card is healthy */
+    hws_check_card_status(hws);
+
+    /* Mark stream running and clear stop flag */
+    hws->stream_running[ch] = true;
+    hws->stop_requested[ch] = false;
+
+    /* Reset ring pointers and data pointer */
+
+    // FIXME: these are in video struct instead of the audio struct
+    hws->wr_idx[ch]   = 0;
+    hws->rd_idx[ch]   = 0;
+    hws->data_buf[ch] = NULL;
+
+    /* Unlock any leftover buffers in the queue */
+    for (j = 0; j < MAX_AUDIO_QUEUE; ++j)
+        hws->audio_info[ch].status[j].lock = MEM_UNLOCK;
+
+    /* Tell the work handler the queue is live */
+    hws->audio_info[ch].is_running = true;
+
+    /* Kick off the hardware DMA */
+    hws_enable_audio_capture(hws, ch, true);
+
+    dev_dbg(&hws->pdev->dev,
+            "audio capture started on channel %u\n", ch);
+    return 0;
 }
 
-void StopAudioCapture(struct hws_pcie_dev *pdx, int index)
+static void hws_stop_audio_capture(struct hws_pcie_dev *hws,
+                                   unsigned int ch)
 {
-	//int inc=0;
-	if (pdx->m_bAudioRun[index] == 0)
-		return;
-	pdx->m_bAudioRun[index] = 0;
-	pdx->m_bAudioStop[index] = 1;
-	pdx->m_nAudioBufferIndex[index] = 0;
-	pdx->m_AudioInfo[index].dwisRuning = 0;
-#if 0
-	while(1)
-	{
-		if(pdx->m_bAudioStop[index] ==0)
-		{
-			break;
-		}
-		inc++;
-		if(inc >2000)
-		{
-			break;
-		}
-		msleep(10);
-	}
-#endif
-	EnableAudioCapture(pdx, index, 0);
+    /* nothing to do if not currently running */
+    if (!hws->stream_running[ch])
+        return;
+
+    /* mark stream stopped */
+    hws->stream_running[ch] = false;
+    hws->stop_requested[ch] = true;
+
+    // FIXME: these are in video struct instead of the audio struct
+    /* reset write pointer for a fresh restart */
+    hws->wr_idx[ch] = 0;
+
+    /* disable the work‑queue handler */
+    hws->audio_info[ch].is_running = false;
+
+    /* shut off the DMA in hardware */
+    hws_enable_audio_capture(hws, ch, false);
+
+    dev_dbg(&hws->pdev->dev,
+            "audio capture stopped on channel %u\n", ch);
 }
 
-//------------------------------------
-int MemCopyAudioToSteam(struct hws_pcie_dev *pdx, int dwAudioCh)
+static int hws_copy_audio_to_stream(struct hws_pcie_dev *hws,
+                                    unsigned int ch)
 {
-	int i = 0;
-	BYTE *bBuf = NULL;
-	BYTE *pSrcBuf = NULL;
-	int nIndex = -1;
-	unsigned long flags;
-	//int status =-1;
-	//printk("MemCopyAudioToSteam =%d",dwAudioCh);
-	if (pdx->m_nAudioBufferIndex[dwAudioCh] == 0) {
-		pSrcBuf = pdx->m_pbyAudioBuffer[dwAudioCh] +
-			  pdx->m_dwAudioPTKSize;
-	} else {
-		pSrcBuf = pdx->m_pbyAudioBuffer[dwAudioCh];
-	}
+    unsigned long flags;
+    u8    *src, *dst = NULL;
+    int    i, idx = -1;
 
-	//-----------------------------------------------------
-	nIndex = -1;
-	if (pdx->m_AudioInfo[dwAudioCh].dwisRuning == 1) {
-		for (i = pdx->m_AudioInfo[dwAudioCh].m_nAudioIndex;
-		     i < MAX_AUDIO_QUEUE; i++) {
-			if (pdx->m_AudioInfo[dwAudioCh].pStatusInfo[i].byLock ==
-			    MEM_UNLOCK) {
-				nIndex = i;
-				bBuf = pdx->m_AudioInfo[dwAudioCh]
-					       .m_pAudioBufData[i];
-				break;
-			}
-		}
-		if (nIndex == -1) {
-			for (i = 0;
-			     i < pdx->m_AudioInfo[dwAudioCh].m_nAudioIndex;
-			     i++) {
-				if (pdx->m_AudioInfo[dwAudioCh]
-					    .pStatusInfo[i]
-					    .byLock == MEM_UNLOCK) {
-					nIndex = i;
-					bBuf = pdx->m_AudioInfo[dwAudioCh]
-						       .m_pAudioBufData[i];
-					break;
-				}
-			}
-		}
+    /* pick which half of the DMA buffer to copy */
+    if (hws->wr_idx[ch] == 0)
+        src = hws->buf_virt[ch] + hws->audio_pkt_size;
+    else
+        src = hws->buf_virt[ch];
 
-		if ((nIndex != -1) && bBuf) {
-			//pci_dma_sync_single_for_cpu(pdx->pdev,pdx->m_pbyAudio_phys[dwAudioCh],MAX_AUDIO_CAP_SIZE,2);
-			dma_sync_single_for_cpu(&pdx->pdev->dev,
-						pdx->m_pbyAudio_phys[dwAudioCh],
-						MAX_AUDIO_CAP_SIZE, 2);
-			memcpy(bBuf, pSrcBuf, pdx->m_dwAudioPTKSize);
+    /* nothing to do if capture isn’t running */
+    if (!hws->audio_info[ch].is_running)
+        return 0;
 
-			pdx->m_AudioInfo[dwAudioCh].m_nAudioIndex = nIndex + 1;
-			if (pdx->m_AudioInfo[dwAudioCh].m_nAudioIndex >=
-			    MAX_AUDIO_QUEUE) {
-				pdx->m_AudioInfo[dwAudioCh].m_nAudioIndex = 0;
-			}
-			spin_lock_irqsave(&pdx->audiolock[dwAudioCh], flags);
-			pdx->m_AudioInfo[dwAudioCh]
-				.pStatusInfo[nIndex]
-				.dwLength = pdx->m_dwAudioPTKSize;
-			pdx->m_AudioInfo[dwAudioCh].pStatusInfo[nIndex].byLock =
-				MEM_LOCK;
-			spin_unlock_irqrestore(&pdx->audiolock[dwAudioCh],
-					       flags);
-			//KeSetEvent(& pdx->m_AudioInfo[dwAudioCh].m_pAudioEvent[audio_index],IO_NO_INCREMENT,FALSE);
-			//printk("Set Audio Event %d\n",dwAudioCh);
-			//pdx->audio[dwAudioCh].pos = pdx->m_dwAudioPTKSize;
-			//snd_pcm_period_elapsed(pdx->audio[dwAudioCh].substream);
-			queue_work(pdx->auwq, &pdx->audio[dwAudioCh].audiowork);
-			//pdx->m_AudioInfo[dwAudioCh].pStatusInfo[nIndex].byLock = MEM_UNLOCK;
+    /* find next free slot in the software ring */
+    for (i = hws->wr_idx[ch]; i < MAX_AUDIO_QUEUE; ++i) {
+        if (hws->audio_info[ch].status[i].lock == MEM_UNLOCK) {
+            idx = i;
+            dst = hws->audio_info[ch].buf_data[i];
+            break;
+        }
+    }
+    if (idx < 0) {
+        for (i = 0; i < hws->wr_idx[ch]; ++i) {
+            if (hws->audio_info[ch].status[i].lock == MEM_UNLOCK) {
+                idx = i;
+                dst = hws->audio_info[ch].buf_data[i];
+                break;
+            }
+        }
+    }
 
-		} else {
-			printk("No Audio Buffer Write %d", dwAudioCh);
-		}
-	}
-	return 0;
+    if (idx < 0 || !dst) {
+        dev_warn(&hws->pdev->dev,
+                 "no free audio buffer on channel %u\n", ch);
+        return -ENOMEM;
+    }
+
+    /* sync the DMA page into CPU domain */
+    dma_sync_single_for_cpu(&hws->pdev->dev,
+                            hws->buf_phys_addr[ch],
+                            MAX_AUDIO_CAP_SIZE,
+                            DMA_FROM_DEVICE);
+
+    /* copy the packet into our slot */
+    memcpy(dst, src, hws->audio_pkt_size);
+
+    /* advance write pointer */
+    hws->wr_idx[ch] = (idx + 1) % MAX_AUDIO_QUEUE;
+
+    /* mark the slot with length & locked */
+    spin_lock_irqsave(&hws->audiolock[ch], flags);
+    hws->audio_info[ch].status[idx].length = hws->audio_pkt_size;
+    hws->audio_info[ch].status[idx].lock   = MEM_LOCK;
+    spin_unlock_irqrestore(&hws->audiolock[ch], flags);
+
+    /* kick the workqueue to deliver to ALSA */
+    queue_work(hws->audio_wq, &hws->audio[ch].audio_work);
+
+    return 0;
 }
 
-int SetAudioQueue(struct hws_pcie_dev *pdx, int dwAudioCh)
+static int hws_set_audio_queue(struct hws_pcie_dev *hws, unsigned int ch)
 {
-	int status = -1;
-	//int i;
-	//BYTE *bBuf = NULL;
-	//BYTE *pSrcBuf= NULL;
-	//int nIndex = -1;
-	//printk("SetAudioQuene =%d",dwAudioCh);
-	if (!pdx->m_bACapStarted[dwAudioCh]) {
-		return -1;
-	}
-	if (!pdx->m_bAudioRun[dwAudioCh]) {
-		if (pdx->m_bAudioStop[dwAudioCh] == 1) {
-			pdx->m_bAudioStop[dwAudioCh] = 0;
-			//DbgPrint("DpcForIsr_Audio0 Exit Event[%d]\n",dwAudioCh);
-		}
-		pdx->m_nAudioBusy[dwAudioCh] = 0;
-		return status;
-	}
+    int ret = 0;
 
-	pdx->m_nAudioBusy[dwAudioCh] = 1;
+    dev_dbg(&hws->pdev->dev,
+            "set audio queue on channel %u\n", ch);
 
-	status = MemCopyAudioToSteam(pdx, dwAudioCh);
+    /* no DMA until capture has been enabled */
+    if (!hws->cap_active[ch])
+        return -ENODEV;
 
-	pdx->m_nAudioBusy[dwAudioCh] = 0;
+    /* if stream is stopped, clear stop flag and exit */
+    if (!hws->stream_running[ch]) {
+        if (hws->stop_requested[ch]) {
+            hws->stop_requested[ch] = false;
+            dev_dbg(&hws->pdev->dev,
+                    "cleared stop flag on channel %u\n", ch);
+        }
+        hws->dma_busy[ch] = false;
+        return 0;
+    }
 
-	return status;
+    /* mark DMA busy while copying */
+    hws->dma_busy[ch] = true;
+    ret = hws_copy_audio_to_stream(hws, ch);
+    hws->dma_busy[ch] = false;
+
+    return ret;
 }
 
-//---------------------------------------------------
+
 static int _deliver_samples(struct hws_audio *drv, void *aud_data, u32 aud_len)
 {
 	struct snd_pcm_substream *substream = drv->substream;
@@ -236,108 +238,78 @@ static int _deliver_samples(struct hws_audio *drv, void *aud_data, u32 aud_len)
 	return frames * 2 * drv->channels;
 }
 
-void audio_data_process(struct work_struct *p_work)
+void audio_data_process(struct work_struct *work)
 {
-	struct hws_audio *drv =
-		container_of(p_work, struct hws_audio, audiowork);
-	//struct snd_pcm_substream *substream = drv->substream;
-	struct hws_pcie_dev *pdx = drv->dev;
-	int nIndex;
-	int i;
-	int delived = 0;
-	//unsigned int frames;
-	BYTE *bBuf = NULL;
-	//int copysize =0;
-	//int rev_size=0;
-	int dwAudioCh;
-	int aud_len;
+	struct hws_audio     *chan = container_of(work,
+	                                          struct hws_audio,
+	                                          audio_work);      /* was audiowork */
+	struct hws_pcie_dev  *hws  = chan->parent;                /* was dev  */
+	const unsigned int    ch   = chan->channel_index;         /* was index */
 	unsigned long flags;
-	//int avail = 0;
-	dwAudioCh = drv->index;
-	nIndex = -1;
-	//printk("audio_data_process %d\n",dwAudioCh);
-	spin_lock_irqsave(&pdx->audiolock[dwAudioCh], flags);
-	for (i = pdx->m_nRDAudioIndex[dwAudioCh]; i < MAX_AUDIO_QUEUE; i++) {
-		if (pdx->m_AudioInfo[dwAudioCh].pStatusInfo[i].byLock ==
-		    MEM_LOCK) {
-			nIndex = i;
-			bBuf = pdx->m_AudioInfo[dwAudioCh].m_pAudioBufData[i];
-			aud_len = pdx->m_AudioInfo[dwAudioCh]
-					  .pStatusInfo[i]
-					  .dwLength;
+	int          i;
+	int          rd          = hws->rd_idx[ch];
+	u8          *buf         = NULL;
+	u32          len         = 0;
+
+	spin_lock_irqsave(&hws->audiolock[ch], flags);
+	for (i = 0; i < MAX_AUDIO_QUEUE; ++i) {
+		int idx = (rd + i) % MAX_AUDIO_QUEUE;
+
+		if (hws->audio_info[ch].status[idx].lock == MEM_LOCK) {
+			buf = hws->audio_info[ch].buf_data[idx];
+			len = hws->audio_info[ch].status[idx].length;
+
+			/* Hand the buffer over to userspace and release it          */
+			hws->audio_info[ch].status[idx].lock = MEM_UNLOCK;
+			hws->rd_idx[ch] = (idx + 1) % MAX_AUDIO_QUEUE;
 			break;
 		}
 	}
-	if (nIndex == -1) {
-		for (i = 0; i < pdx->m_nRDAudioIndex[dwAudioCh]; i++) {
-			if (pdx->m_AudioInfo[dwAudioCh].pStatusInfo[i].byLock ==
-			    MEM_LOCK) {
-				nIndex = i;
-				bBuf = pdx->m_AudioInfo[dwAudioCh]
-					       .m_pAudioBufData[i];
-				aud_len = pdx->m_AudioInfo[dwAudioCh]
-						  .pStatusInfo[i]
-						  .dwLength;
-				break;
-			}
-		}
-	}
-	if ((nIndex != -1) && (bBuf)) {
-		//--- send data -------------
-		delived = _deliver_samples(drv, bBuf, aud_len);
-#if 0
-		 avail = aud_len - delived;
-		 if(avail)
-		 {
-		 	printk("Sample Rate is wrong  =%d \n",avail);
-		 }
-#endif
-		//----------------------------------------------
-		//spin_lock_irqsave(&pdx->audiolock[dwAudioCh], flags);
-		pdx->m_AudioInfo[dwAudioCh].pStatusInfo[nIndex].byLock =
-			MEM_UNLOCK;
-		//spin_unlock_irqrestore(&pdx->audiolock[dwAudioCh], flags);
-		nIndex++;
-		if (nIndex >= MAX_AUDIO_QUEUE) {
-			nIndex = 0;
-		}
-		pdx->m_nRDAudioIndex[dwAudioCh] = nIndex;
-	}
-	spin_unlock_irqrestore(&pdx->audiolock[dwAudioCh], flags);
+	spin_unlock_irqrestore(&hws->audiolock[ch], flags);
+
+	/* Copy samples to ALSA only after the lock is dropped */
+	if (buf && len)
+		_deliver_samples(chan, buf, len);
 }
 
-void EnableAudioCapture(struct hws_pcie_dev *pdx, int index, int en)
+static inline void hws_enable_audio_capture(struct hws_pcie_dev *hws,
+                                            unsigned int ch,
+                                            bool enable)
 {
-	ULONG status;
-	int enable;
-	if (pdx->m_PciDeviceLost)
-		return;
+    u32 reg, mask = BIT(ch);
 
-	status = READ_REGISTER_ULONG(pdx, HWS_REG_ACAP_ENABLE);
+    /* no-op if the card has been lost */
+    if (hws->pci_lost)
+        return;
 
-	if (en) {
-		enable = 1;
-		enable = enable << index;
-		status = status | enable;
-	} else {
-		enable = 1;
-		enable = enable << index;
-		enable = ~enable;
-		status = status & enable;
-	}
-	pdx->m_bACapStarted[index] = en;
-	WRITE_REGISTER_ULONG(pdx, HWS_REG_ACAP_ENABLE, status);
-	//printk("EnableAudioCapture =%X",status);
+    /* read current enable bitmap */
+    reg = readl(hws->bar0_base + HWS_REG_ACAP_ENABLE);
+
+    if (enable)
+        reg |= mask;
+    else
+        reg &= ~mask;
+
+    /* update our software state */
+    hws->cap_active[ch] = enable;
+
+    /* write back to HW */
+    writel(reg, hws->bar0_base + HWS_REG_ACAP_ENABLE);
+
+    dev_dbg(&hws->pdev->dev,
+            "audio capture %s on ch %u, reg=0x%08x\n",
+            enable ? "enabled" : "disabled", ch, reg);
 }
 
-int CheckAudioCapture(struct hws_pcie_dev *pdx, int index)
+static inline bool hws_check_audio_capture(struct hws_pcie_dev *hws,
+                                           unsigned int ch)
 {
-	ULONG status;
-	int enable;
-	status = READ_REGISTER_ULONG(pdx, HWS_REG_ACAP_ENABLE);
+    u32 reg;
 
-	enable = (status >> index) & 0x01;
-	return enable;
+    /* read back enable bitmap */
+    reg = readl(hws->bar0_base + HWS_REG_ACAP_ENABLE);
+
+    return !!(reg & BIT(ch));
 }
 
 //-------------------------------------------------
@@ -411,33 +383,35 @@ int hws_pcie_audio_prepare(struct snd_pcm_substream *substream)
 
 	return 0;
 }
+
 int hws_pcie_audio_trigger(struct snd_pcm_substream *substream, int cmd)
 {
-	struct hws_audio *chip = snd_pcm_substream_chip(substream);
-	struct hws_pcie_dev *dev = chip->dev;
-	switch (cmd) {
-	case SNDRV_PCM_TRIGGER_START:
-		//HWS_PCIE_READ(HWS_DMA_BASE(chip->index), HWS_DMA_STATUS);
-		//start dma
-		//HWS_PCIE_WRITE(HWS_INT_BASE, HWS_DMA_MASK(chip->index), 0x00000001);
-		//HWS_PCIE_WRITE(HWS_DMA_BASE(chip->index), HWS_DMA_START, 0x00000001);
-		//printk(KERN_INFO "SNDRV_PCM_TRIGGER_START index:%x\n",chip->index);
-		chip->ring_wpos_byframes = 0;
-		chip->period_used_byframes = 0;
-		StartAudioCapture(dev, chip->index);
-		break;
-	case SNDRV_PCM_TRIGGER_STOP:
-		//stop dma
-		//HWS_PCIE_WRITE(HWS_INT_BASE, HWS_DMA_MASK(chip->index), 0x000000000);
-		//HWS_PCIE_WRITE(HWS_DMA_BASE(chip->index), HWS_DMA_START, 0x00000000);
-		//printk(KERN_INFO "SNDRV_PCM_TRIGGER_STOP index:%x\n",chip->index);
-		StopAudioCapture(dev, chip->index);
-		break;
-	default:
-		return -EINVAL;
-		break;
-	}
-	return 0;
+    struct hws_audio    *audio = snd_pcm_substream_chip(substream);
+    struct hws_pcie_dev *hws   = audio->parent;           /* was dev */
+    unsigned int         ch    = audio->channel_index;    /* was index */
+    int                  err   = 0;
+
+    dev_dbg(&hws->pdev->dev,
+            "audio trigger %d on channel %u\n", cmd, ch);
+    switch (cmd) {
+    case SNDRV_PCM_TRIGGER_START:
+        audio->ring_write_pos_frames = 0;  /* was ring_wpos_byframes */
+        audio->period_used_frames    = 0;  /* was period_used_byframes */
+	// FIXME
+        hws_start_audio_capture(hws, ch);
+        break;
+
+    case SNDRV_PCM_TRIGGER_STOP:
+	// FIXME
+        hws_stop_audio_capture(hws, ch);
+        break;
+
+    default:
+        err = -EINVAL;
+        break;
+    }
+
+    return err;
 }
 
 struct snd_pcm_ops hws_pcie_pcm_ops = { .open = hws_pcie_audio_open,
