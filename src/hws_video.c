@@ -322,3 +322,30 @@ err_unreg_nodes:
     }
     return err;
 }
+
+void hws_video_unregister(struct hws_pcie_dev *dev)
+{
+    int i;
+
+    /* For each channel, in reverse order of registration: */
+    for (i = 0; i < dev->cur_max_video_ch; i++) {
+        struct hws_video *hws = &dev->video[i];
+
+        /* 1) Stop any pending work */
+        cancel_work_sync(&hws->video_work);
+
+        /* 2) Unregister the V4L2 video device;
+         *    this also calls ->release and frees the struct video_device
+         *    that was allocated via devm_video_device_alloc().
+         */
+        video_unregister_device(hws->vdev);
+
+        /* 3) Clean up the vb2 queue buffers and any vmalloc’d buffers. */
+        vb2_queue_cleanup(&hws->buffer_queue);
+    }
+
+    /* Note: devm_v4l2_device_register() is managed by the device,
+     * so you don’t need to explicitly unregister it here.
+     */
+}
+

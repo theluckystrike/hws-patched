@@ -295,28 +295,31 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
             hws_dev->main_task = NULL;
             goto err_free_dma;
     }
-	// NOTE: loops around `hws_get_video_param`, which sets values based on vcap status height/width
+
 	hws_adapters_init(hws_dev);
 
 	hws_dev->video_wq = create_singlethread_workqueue("hws");
-	    if (!hws_dev->video_wq) {
+	if (!hws_dev->video_wq) {
 		    ret = -ENOMEM;
 		    goto err_stop_thread;
-	    }
+	}
 	hws_dev->audio_wq = create_singlethread_workqueue("hws-audio");
-	    if (!hws_dev->audio_wq) {
+	if (!hws_dev->audio_wq) {
 		    ret = -ENOMEM;
 		    goto err_destroy_video_wq;
-	    }
+	}
 
+	// FIXME: figure out if this hardware only supports 4 GB RAM
 	if (hws_video_register(hws_dev))
 		goto err_destroy_wq;
 
     // FIXME: `audio_data_process` which gets set/called from this func sucks
 	if (hws_audio_register(hws_dev))
-        // FIXME: not sure this goto makes sense
-		goto err_destroy_wq;
+		goto err_unregister_video;
 	return 0;
+
+err_unregister_video:
+	hws_video_unregister(hws);
 err_destroy_wq:
         destroy_workqueue(hws->video_wq);
         destroy_workqueue(hws->audio_wq);
@@ -699,7 +702,6 @@ static struct hws_pcie_dev *hws_alloc_dev_instance(struct pci_dev *pdev)
 
     return lro;
 }
-//--------------------------------------
 
 /* type = PCI_CAP_ID_MSI or PCI_CAP_ID_MSIX */
 int msi_msix_capable(struct pci_dev *dev, int type)
@@ -817,7 +819,6 @@ static int hws_irq_setup(struct hws_pcie_dev *hws)
         return irq;
     }
 
-    /* Managed IRQ — we don’t need an explicit free_irq() on error/remove */
     rc = devm_request_irq(&pdev->dev, irq, irqhandler,
                           flags, dev_name(&pdev->dev), hws);
     if (rc) {
@@ -851,8 +852,7 @@ static struct pci_driver hws_pci_driver = {
 	.probe = hws_probe,
 	.remove = hws_remove,
 };
-/*
-*/
+
 #ifndef arch_msi_check_device
 int arch_msi_check_device(struct pci_dev *dev, int nvec, int type)
 {
