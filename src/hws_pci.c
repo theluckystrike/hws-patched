@@ -347,6 +347,26 @@ err_free_dev:
         return ret;
 }
 
+static int hws_check_busy(struct hws_pcie_dev *pdx)
+{
+    void __iomem *reg = pdx->mmio_base + HWS_REG_SYS_STATUS;
+    u32 val;
+    int ret;
+
+    /* poll until !(val & BUSY_BIT), sleeping HWS_BUSY_POLL_DELAY_US between reads */
+    ret = readl_poll_timeout(reg, val,
+                             !(val & HWS_SYS_DMA_BUSY_BIT),
+                             HWS_BUSY_POLL_DELAY_US,
+                             HWS_BUSY_POLL_TIMEOUT_US);
+    if (ret) {
+        dev_err(&pdx->pdev->dev,
+                "SYS_STATUS busy bit never cleared (0x%08x)\n", val);
+        return -ETIMEDOUT;
+    }
+
+    return 0;
+}
+
 static void hws_stop_dsp(struct hws_pcie_dev *hws)
 {
     u32 status;
@@ -407,8 +427,7 @@ void hws_remove(struct pci_dev *pdev)
 	//----------------------------
 	if (dev->map_bar0_addr == NULL)
 		return;
-	//StopSys(dev);
-	StopDevice(dev);
+	hws_stop_device(dev);
 	/* disable interrupts */
 	hws_free_irqs(dev);
 
