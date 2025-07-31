@@ -37,57 +37,5 @@ static int hws_check_sys_busy(struct hws_pcie_dev *pdx)
     return 0;
 }
 
-static void StopDsp(struct hws_pcie_dev *pdx)
-{
-	//int j, i;
-	u32 statusreg;
-	statusreg = READ_REGISTER_ULONG(pdx, HWS_REG_DEC_MODE);
-	printk("[MV] Busy!!! statusreg =%X\n", statusreg);
-	if (statusreg == 0xFFFFFFFF) {
-		return;
-	}
-	WRITE_REGISTER_ULONG(pdx, HWS_REG_DEC_MODE, 0x10);
-	// FIXME: not reading return result for -ETIMEDOUT
-	Check_Busy(pdx);
-	WRITE_REGISTER_ULONG(pdx, HWS_REG_VCAP_ENABLE, 0x00);
-}
-
 
 //---------------------------------------
-void check_card_status(struct hws_pcie_dev *pdx)
-{
-	u32 status;
-	status = READ_REGISTER_ULONG(pdx, HWS_REG_SYS_STATUS);
-
-	if ((status & BIT(0)) != BIT(0)) {
-		InitVideoSys(pdx, 1);
-	}
-}
-
-
-void StopDevice(struct hws_pcie_dev *pdx)
-{ // StopDevice
-	//Trace t("StopDevice()");
-	int i;
-	//int   device_lost =0;
-	u32 statusreg;
-	StopDsp(pdx);
-	statusreg = READ_REGISTER_ULONG(pdx, (0x4000));
-	//DbgPrint("[MV] Busy!!! statusreg =%X\n", statusreg);
-	if (statusreg != 0xFFFFFFFF) {
-		//set to one buffer mode
-		//WRITE_REGISTER_ULONG((u32)(CVBS_IN_BASE + (25*PCIE_BARADDROFSIZE)), 0x00); //Buffer 1 address
-	} else {
-		pdx->m_PciDeviceLost = 1;
-	}
-	pdx->m_bStartRun = 0;
-	if (pdx->m_PciDeviceLost == 0) {
-		for (i = 0; i < MAX_VID_CHANNELS; i++) {
-			EnableVideoCapture(pdx, i, 0);
-			EnableAudioCapture(pdx, i, 0);
-		}
-	}
-	//if(device_lost) return;
-	dma_mem_free_pool(pdx);
-	//printk("StopDevice Done\n");
-}

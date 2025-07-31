@@ -117,6 +117,15 @@ void hws_enable_video_capture(struct hws_pcie_dev *hws,
     hws_write32(hws, HWS_REG_VCAP_ENABLE, status);
 }
 
+void check_card_status(struct hws_pcie_dev *pdx)
+{
+	u32 status;
+	status = READ_REGISTER_ULONG(pdx, HWS_REG_SYS_STATUS);
+
+	if ((status & BIT(0)) != BIT(0)) {
+		InitVideoSys(pdx, 1);
+	}
+}
 
 int StartVideoCapture(struct hws_pcie_dev *pdx, int index)
 {

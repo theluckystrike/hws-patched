@@ -347,6 +347,58 @@ err_free_dev:
         return ret;
 }
 
+static void hws_stop_dsp(struct hws_pcie_dev *hws)
+{
+    u32 status;
+
+    /* Read the decoder mode/status register */
+    status = readl(hws->regs + HWS_REG_DEC_MODE);
+    dev_dbg(&hws->pdev->dev, "hws_stop_dsp: status=0x%08x\n", status);
+
+    /* If the device looks unplugged/stuck, bail out */
+    if (status == 0xFFFFFFFF)
+        return;
+
+    /* Tell the DSP to stop */
+    writel(0x10, hws->regs + HWS_REG_DEC_MODE);
+
+    /* FIXME: hws_check_busy() should return an error if it times out */
+    hws_check_busy(hws);
+
+    /* Disable video capture engine in the DSP */
+    writel(0x0, hws->regs + HWS_REG_VCAP_ENABLE);
+}
+
+static void hws_stop_device(struct hws_pcie_dev *hws)
+{
+    unsigned int i;
+    u32 status;
+
+    /* 1) Stop the on-board DSP */
+    hws_stop_dsp(hws);
+
+    /* 2) Check for a lost PCI device */
+    status = readl(hws->regs + HWS_REG_STATUS);
+    dev_dbg(&hws->pdev->dev, "hws_stop_device: status=0x%08x\n", status);
+    if (status == 0xFFFFFFFF) {
+        hws->pci_dev_lost = true;
+    } else {
+        /* 3) Tear down each video/audio channel */
+        for (i = 0; i < hws->num_video_ch; ++i) {
+            hws_enable_video_capture(hws, i, false);
+            hws_enable_audio_capture(hws, i, false);
+        }
+    }
+
+    /* 4) Mark the device as no longer running */
+    hws->running = false;
+
+    /* 5) Free any DMA pools / buffer pools you allocated */
+    hws_dma_free_pool(hws);
+
+    dev_dbg(&hws->pdev->dev, "hws_stop_device: complete\n");
+}
+
 void hws_remove(struct pci_dev *pdev)
 {
 	int i;
