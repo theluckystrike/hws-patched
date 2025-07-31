@@ -35,6 +35,21 @@
 	.driver_data	= (unsigned long) (__configptr)			\
 }
 
+#define CH_SHIFT    2                    /* need 2 bits for 0-3            */
+#define CH_MASK     GENMASK(CH_SHIFT-1, 0)
+
+static inline unsigned long pack_dev_ch(struct hws_pcie_dev *dev, u32 ch)
+{
+        return (unsigned long)dev | ch;          /* dev is pointer-aligned   */
+}
+
+static inline void unpack_dev_ch(unsigned long data,
+                                 struct hws_pcie_dev **dev, u32 *ch)
+{
+        *ch  = data & CH_MASK;
+        *dev = (struct hws_pcie_dev *)(data & ~CH_MASK);
+}
+
 
 static const struct pci_device_id hws_pci_table[] = {
 	MAKE_ENTRY(0x8888, 0x9534, 0x8888, 0x0007, NULL),
@@ -700,12 +715,10 @@ static int hws_audio_init_channel(struct hws_pcie_dev *pdev, int ch)
 	spin_lock_init(&pdev->audiolock[ch]);
 
 	/* ── per-channel tasklet for ISR bottom-half ──────────────── */
-	tasklet_init(&pdev->dpc_audio_tasklet[ch],
-		     ch == 0 ? DpcForIsr_Audio0 :
-		     ch == 1 ? DpcForIsr_Audio1 :
-		     ch == 2 ? DpcForIsr_Audio2 :
-		               DpcForIsr_Audio3,
-		     (unsigned long) pdev);
+        tasklet_init(&pdev->dpc_audio_tasklet[ch],
+                     hws_dpc_audio,
+                     pack_dev_ch(pdev, ch));
+
 
 	return 0;
 }

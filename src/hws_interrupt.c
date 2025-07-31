@@ -5,34 +5,45 @@
 #include "hws_video_pipeline.h"
 #include "hws_audio_pipeline.h"
 
-static int SetQueue(struct hws_pcie_dev *pdx, int nDecoder)
+/**
+ * hws_set_queue() - Fetch next video buffer and push it downstream
+ * @hws:    driver instance
+ * @ch:     video channel index
+ *
+ * Returns 0 on success or a negative errno on failure.
+ */
+static int hws_set_queue(struct hws_pcie_dev *hws, unsigned int ch)
 {
-	int status = -1;
-	//KLOCK_QUEUE_HANDLE  oldirql;
-	//DbgPrint("SetQueue %d",nDecoder);
-	if (!pdx->m_bStartRun) {
-		return -1;
-	}
-	if (!pdx->m_bVCapStarted[nDecoder]) {
-		if (pdx->m_bVideoStop[nDecoder] == 1) {
-			pdx->m_bVideoStop[nDecoder] = 0;
-			//DbgPrint("KeSetEvent Exit Event[%d]\n",nDecoder);
-		}
+    int ret = -ENODEV;
 
-		return -1;
-	}
-	//-------------------
-	if (pdx->m_DeviceHW_Version == 0) {
-		pdx->m_dwSWFrameRate[nDecoder]++;
-	}
-	//-------------------
-	pdx->m_nVideoBusy[nDecoder] = 1;
-	//-------------------------------
-	if (pdx->m_bVCapStarted[nDecoder] == TRUE) {
-		status = MemCopyVideoToSteam(pdx, nDecoder);
-	}
-	pdx->m_nVideoBusy[nDecoder] = 0;
-	return status;
+    /* Not yet started? */
+    if (!hws->running)
+        return -EINVAL;
+
+    /* Channel not streaming?  Reset any stop flag and bail. */
+    if (!hws->vcap_started[ch]) {
+        if (hws->video_stop[ch]) {
+            hws->video_stop[ch] = false;
+            dev_dbg(&hws->pdev->dev,
+                    "hws_set_queue[%u]: exit-stop cleared\n", ch);
+        }
+        return -ENODEV;
+    }
+
+    /* On older hardware, bump our software frame counter */
+    if (hws->device_hw_version == 0)
+        hws->sw_frame_rate[ch]++;
+
+    /* Mark the channel busy while copying */
+    hws->video_busy[ch] = true;
+
+    /* Pull data from the device into the vb2 stream */
+    ret = hws_memcopy_video_to_stream(hws, ch);
+
+    /* Done copying */
+    hws->video_busy[ch] = false;
+
+    return ret;
 }
 
 //-----------------------------
@@ -133,199 +144,37 @@ void hws_free_irqs(struct hws_pcie_dev *lro)
 	}
 }
 
-
-void DpcForIsr_Audio0(unsigned long data)
+static void hws_dpc_audio(unsigned long data)
 {
-	int index;
-	struct hws_pcie_dev *pdx;
-	//pdx = sys_dvrs_hw_pdx;
-	pdx = (struct hws_pcie_dev *)data;
-	//unsigned long *pdata = (unsigned long *)data;
-	//curr_buf_index = *pdata;
-	index = 0;
-	SetAudioQueue(pdx, index);
+        struct hws_pcie_dev *hws;
+        u32                  ch;
+
+        unpack_dev_ch(data, &hws, &ch);
+        hws_set_audio_queue(hws, ch);          /* unchanged business logic */
 }
 
-void DpcForIsr_Audio1(unsigned long data)
+static void hws_dpc_video(unsigned long data)
 {
-	int index;
-	struct hws_pcie_dev *pdx;
-	//pdx = sys_dvrs_hw_pdx;
-	pdx = (struct hws_pcie_dev *)data;
-	//unsigned long *pdata = (unsigned long *)data;
-	//curr_buf_index = *pdata;
-	index = 1;
-	SetAudioQueue(pdx, index);
+        struct hws_pcie_dev *hws;
+        u32                  ch;
+        int                  ret;
+
+        unpack_dev_ch(data, &hws, &ch);
+
+        ret = hws_set_queue(hws, ch);
+        if (ret || !hws->m_bVCapStarted[ch])
+                return;
+
+        if (hws->m_bVCapIntDone[ch] && hws->m_pVideoEvent[ch]) {
+                hws->m_bVCapIntDone[ch] = false;
+
+                if (!hws->m_bChangeVideoSize[ch]) {
+                        queue_work(hws->wq, &hws->video[ch].videowork);
+                } else {
+                        hws->m_bChangeVideoSize[ch] = 0;
+                }
+        }
 }
 
-void DpcForIsr_Audio2(unsigned long data)
-{
-	int index;
-	struct hws_pcie_dev *pdx;
-	//pdx = sys_dvrs_hw_pdx;
-	pdx = (struct hws_pcie_dev *)data;
-	//unsigned long *pdata = (unsigned long *)data;
-	//curr_buf_index = *pdata;
-	index = 2;
-	SetAudioQueue(pdx, index);
-}
 
-void DpcForIsr_Audio3(unsigned long data)
-{
-	int index;
-	struct hws_pcie_dev *pdx;
-	//pdx = sys_dvrs_hw_pdx;
-	pdx = (struct hws_pcie_dev *)data;
-	//unsigned long *pdata = (unsigned long *)data;
-	//curr_buf_index = *pdata;
-	index = 3;
-	SetAudioQueue(pdx, index);
-}
 
-void DpcForIsr_Video0(unsigned long data)
-{
-	int i = 0;
-	int ret;
-	//int curr_buf_index;
-	struct hws_pcie_dev *pdx;
-	//pdx = sys_dvrs_hw_pdx;
-	pdx = (struct hws_pcie_dev *)data;
-	//unsigned long *pdata = (unsigned long *)data;
-	//curr_buf_index = *pdata;
-	//printk("DpcForIsr_Video0\n");
-	ret = SetQueue(pdx, i);
-	//printk("[%X] pdx->m_bVCapStarted[i]=%d  ret=%d\n", pdx->pdev->device,pdx->m_bVCapStarted[i],ret);
-	if (ret != 0) {
-		return;
-	}
-
-	if (pdx->m_bVCapStarted[i] == TRUE) {
-		//printk("pdx->m_bVCapIntDone[i] = %d\n", pdx->m_bVCapIntDone[i]);
-		//printk("pdx->m_pVideoEvent[i] = %d\n", pdx->m_pVideoEvent[i]);
-
-		if ((pdx->m_bVCapIntDone[i] == TRUE) && pdx->m_pVideoEvent[i]) {
-			pdx->m_bVCapIntDone[i] = FALSE;
-			//printk("pdx->m_bChangeVideoSize[i] = %d\n",pdx->m_bChangeVideoSize[i]);
-			if ((!pdx->m_bChangeVideoSize[i]) &&
-			    (pdx->m_pVideoEvent[i])) {
-				//pdx->wq_flag[i] = 1;
-				//wake_up_interruptible(&pdx->wq_video[i]);
-				//printk("Set Event\n");
-				queue_work(pdx->wq, &pdx->video[i].videowork);
-			} else {
-				pdx->m_bChangeVideoSize[i] = 0;
-			}
-		}
-	}
-}
-
-void DpcForIsr_Video1(unsigned long data)
-{
-	int i = 1;
-	int ret;
-	//int curr_buf_index;
-	struct hws_pcie_dev *pdx;
-	pdx = (struct hws_pcie_dev *)data;
-	//pdx = sys_dvrs_hw_pdx;
-
-	//unsigned long *pdata = (unsigned long *)data;
-	//curr_buf_index = *pdata;
-
-	ret = SetQueue(pdx, i);
-	if (ret != 0) {
-		return;
-	}
-
-	if (pdx->m_bVCapStarted[i] == TRUE) {
-		if (pdx->m_bVCapIntDone[i] == TRUE && pdx->m_pVideoEvent[i]) {
-			pdx->m_bVCapIntDone[i] = FALSE;
-			if (!pdx->m_bChangeVideoSize[i]) {
-				if ((!pdx->m_bChangeVideoSize[i]) &&
-				    (pdx->m_pVideoEvent[i])) {
-					//pdx->wq_flag[i] = 1;
-					//wake_up_interruptible(&pdx->wq_video[i]);
-					queue_work(pdx->wq,
-						   &pdx->video[i].videowork);
-				}
-			} else {
-				pdx->m_bChangeVideoSize[i] = 0;
-			}
-		}
-	}
-}
-
-void DpcForIsr_Video2(unsigned long data)
-{
-	int i = 2;
-	int ret;
-	//int curr_buf_index;
-	struct hws_pcie_dev *pdx;
-	//pdx = sys_dvrs_hw_pdx;
-	pdx = (struct hws_pcie_dev *)data;
-	//unsigned long *pdata = (unsigned long *)data;
-	//curr_buf_index = *pdata;
-	ret = SetQueue(pdx, i);
-	if (ret != 0) {
-		return;
-	}
-
-	if (pdx->m_bVCapStarted[i] == TRUE) {
-		if (pdx->m_bVCapIntDone[i] == TRUE && pdx->m_pVideoEvent[i]) {
-			pdx->m_bVCapIntDone[i] = FALSE;
-			if (!pdx->m_bChangeVideoSize[i]) {
-				if ((!pdx->m_bChangeVideoSize[i]) &&
-				    (pdx->m_pVideoEvent[i])) {
-					//pdx->wq_flag[i] = 1;
-					//wake_up_interruptible(&pdx->wq_video[i]);
-					queue_work(pdx->wq,
-						   &pdx->video[i].videowork);
-				}
-			} else {
-				pdx->m_bChangeVideoSize[i] = 0;
-			}
-		}
-	}
-}
-
-void DpcForIsr_Video3(unsigned long data)
-{
-	int i = 3;
-	int ret;
-	//int curr_buf_index;
-	struct hws_pcie_dev *pdx;
-	//pdx = sys_dvrs_hw_pdx;
-	pdx = (struct hws_pcie_dev *)data;
-	//unsigned long *pdata = (unsigned long *)data;
-	//curr_buf_index = *pdata;
-	//mutex_lock(&pdx->video_mutex[i]);
-	//printk("DpcForIsr_Video3 data = [%d]%d \n",i,curr_buf_index);
-
-	ret = SetQueue(pdx, i);
-	if (ret != 0) {
-		//spin_unlock(&pdx->video_lock[i]);
-		//mutex_unlock(&pdx->video_mutex[i]);
-		return;
-	}
-
-	if (pdx->m_bVCapStarted[i] == TRUE) {
-		if (pdx->m_bVCapIntDone[i] == TRUE && pdx->m_pVideoEvent[i]) {
-			pdx->m_bVCapIntDone[i] = FALSE;
-			if (!pdx->m_bChangeVideoSize[i]) {
-				if ((!pdx->m_bChangeVideoSize[i]) &&
-				    (pdx->m_pVideoEvent[i])) {
-					//KeSetEvent(pdx->m_pVideoEvent[i], 0, FALSE);
-					//printk("SetEvenT[%d]\n",i);
-					//kill_fasync (&hw_async_video3, SIGIO, POLL_IN);
-					//pdx->wq_flag[i] = 1;
-					//wake_up_interruptible(&pdx->wq_video[i]);
-					queue_work(pdx->wq,
-						   &pdx->video[i].videowork);
-				}
-			} else {
-				pdx->m_bChangeVideoSize[i] = 0;
-			}
-		}
-	}
-	//spin_unlock(&pdx->video_lock[i]);
-	//mutex_unlock(&pdx->video_mutex[i]);
-}
