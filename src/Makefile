@@ -5,7 +5,6 @@ HwsCapture-objs := \
 	 hws_interrupt.o \
 	 hws_dma.o \
 	 hws_scaler.o \
-	 hws_init.o \
 	 hws_video_pipeline.o \
 	 hws_video.o \
 	 hws_v4l2_tables.o \
