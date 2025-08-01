@@ -155,8 +155,8 @@ int StartVideoCapture(struct hws_pcie_dev *pdx, int index)
 
 	pdx->m_bChangeVideoSize[index] = 0;
 	pdx->m_bVCapIntDone[index] = 1;
-	pdx->m_pVideoEvent[index] = 1;
-	pdx->m_nVideoBusy[index] = 0;
+	pdx->video[index].irq_event = 1;
+	pdx->video[index].dma_busy = 0;
 	pdx->video_data[index] = 0;
 	hws_enable_video_capture(pdx, index, true);
 	return 0;
@@ -171,7 +171,7 @@ void StopVideoCapture(struct hws_pcie_dev *pdx, int index)
 	//pdx->m_nVideoIndex[index] =0;
 	pdx->m_VideoInfo[index].dwisRuning = 0;
 	pdx->video[index].stop_requested = 1;
-	pdx->m_pVideoEvent[index] = 0;
+	pdx->video[index].irq_event = 0;
 	pdx->m_bChangeVideoSize[index] = 0;
 	hws_enable_video_capture(pdx, index, false);
 	pdx->m_bVCapIntDone[index] = 0;
@@ -432,7 +432,7 @@ static void init_copy_ctx(struct hws_pcie_dev *pdx, int dec,
     c->interlace = pdx->m_pVCAPStatus[dec][0].dwinterlace;
     c->pitch     = pdx->support_yv12 ? w * 12 / 8 : w * 2;
 
-    c->buf_idx   = pdx->m_nVideoBufferIndex[dec];
+    c->buf_idx   = pdx->audio[dec].wr_idx;
     c->half_sz   = pdx->video[dec].fmt_curr.half_size;
     c->copy_sz   = (c->buf_idx == 1) ? c->half_sz
                       : pdx->video[dec].fmt_curr.down_size;

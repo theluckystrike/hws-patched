@@ -41,7 +41,7 @@ struct hws_pcie_dev {
 	// int msix_enabled;	/* flag if msi-x was enabled for the device */	
 	// int irq_user_count;/* user interrupt count */     
 	// int m_PciDeviceLost;
-	struct msix_entry entry[32];	
+	// struct msix_entry entry[32];	
 	// u32 dwDeviceID;
 	// u32 dwVendorID;
 	// u32 m_Device_Version;
@@ -77,15 +77,15 @@ struct hws_pcie_dev {
 	// u32		m_dwAudioBufferHigh[MAX_VID_CHANNELS];
 	// uint8_t m_bVCapStarted[MAX_VID_CHANNELS];
 	//uint8_t	 m_bACapStarted[MAX_VID_CHANNELS];
-	uint8_t     m_nVideoBusy[MAX_VID_CHANNELS];
+	// uint8_t     m_nVideoBusy[MAX_VID_CHANNELS];
 	// uint8_t   m_bVideoStop[MAX_VID_CHANNELS];
 	int       m_nRDVideoIndex[MAX_VID_CHANNELS];
-	int        m_nVideoBufferIndex[MAX_VID_CHANNELS];
+	// int        m_nVideoBufferIndex[MAX_VID_CHANNELS];
 	int       m_nVideoHalfDone[MAX_VID_CHANNELS];
 	// uint8_t   m_nAudioBusy[MAX_VID_CHANNELS];
 	// uint8_t   m_nAudioBufferIndex[MAX_VID_CHANNELS];
 	// uint8_t	  m_pAudioEvent[MAX_VID_CHANNELS];
-	uint8_t		m_pVideoEvent[MAX_VID_CHANNELS];
+	// uint8_t		m_pVideoEvent[MAX_VID_CHANNELS];
 	uint8_t		m_bVCapIntDone[MAX_VID_CHANNELS];
 	// uint8_t m_bAudioRun[MAX_VID_CHANNELS];
 	// uint8_t m_bAudioStop[MAX_VID_CHANNELS];

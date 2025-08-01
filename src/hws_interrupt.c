@@ -78,13 +78,13 @@ static irqreturn_t irqhandler(int irq, void *info)
             pdx->m_bVCapIntDone[ch] = 1;
             ack_mask |= vbit;
 
-            if (pdx->m_nVideoBusy[ch] == 0) {
+            if (pdx->video[ch].dma_busy == 0) {
                 /* Read which half of the ring the DMA is writing to */
                 u32 toggle = READ_REGISTER_ULONG(pdx, HWS_REG_VBUF_TOGGLE(ch)) & 0x01;
 
                 if (pdx->video_data[ch] != toggle) {
                     pdx->video_data[ch]        = toggle;
-                    pdx->m_nVideoBufferIndex[ch] = toggle;
+                    pdx->audio[ch].wr_idx = toggle;
                     tasklet_schedule(&pdx->dpc_video_tasklet[ch]);
                 } else {
                     pdx->m_nVideoHalfDone[ch] = 0;
@@ -130,14 +130,6 @@ void hws_free_irqs(struct hws_pcie_dev *lro)
 
 	//BUG_ON(!lro);
 
-	//if (lro->msix_enabled) {
-	//	for (i = 0; i < lro->irq_user_count; i++) {
-	//		printk("Releasing IRQ#%d\n", lro->entry[i].vector);
-	//		free_irq(lro->entry[i].vector, &lro->user_irq[i]);
-	//	}
-	//}
-	//else
-
 	if (lro->irq_line != -1) {
 		//printk("Releasing IRQ#%d\n", lro->irq_line);
 		free_irq(lro->irq_line, lro);
@@ -165,7 +157,7 @@ static void hws_dpc_video(unsigned long data)
         if (ret || !hws->video[ch].cap_active)
                 return;
 
-        if (hws->m_bVCapIntDone[ch] && hws->m_pVideoEvent[ch]) {
+        if (hws->m_bVCapIntDone[ch] && hws->video[ch].irq_event) {
                 hws->m_bVCapIntDone[ch] = false;
 
                 if (!hws->m_bChangeVideoSize[ch]) {

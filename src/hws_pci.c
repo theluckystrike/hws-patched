@@ -456,13 +456,13 @@ void hws_remove(struct pci_dev *pdev)
 	//-------------------------
 	//printk("hws_remove  1\n");
 	for (i = 0; i < dev->cur_max_video_ch; i++) {
-		if (dev->audio[i].resampled_buf) {
-			vfree(dev->audio[i].resampled_buf);
-			dev->audio[i].resampled_buf = NULL;
+		if (dev->audio[i].resampled_buffer) {
+			vfree(dev->audio[i].resampled_buffer);
+			dev->audio[i].resampled_buffer = NULL;
 		}
-		if (dev->audio[i].card) {
-			snd_card_free(dev->audio[i].card);
-			dev->audio[i].card = NULL;
+		if (dev->audio[i].sound_card) {
+			snd_card_free(dev->audio[i].sound_card);
+			dev->audio[i].sound_card = NULL;
 		}
 	}
 	for (i = 0; i < dev->cur_max_video_ch; i++) {
