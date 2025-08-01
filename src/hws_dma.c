@@ -161,16 +161,13 @@ void hws_set_dma_address(struct hws_pcie_dev *hws)
 			lo              &= addr_mask;
 
 			/* Program the 64-bit BAR remap entry */
-			hws_write32(hws, PCI_ADDR_TABLE_BASE + table_off,              hi);
-			hws_write32(hws, PCI_ADDR_TABLE_BASE + table_off +
-						PCIE_BARADDROFSIZE,                        lo);
+			writel(hi, hws->bar0_base + PCI_ADDR_TABLE_BASE + table_off);
+			writel(lo, hws->bar0_base + PCI_ADDR_TABLE_BASE + table_off + PCIE_BARADDROFSIZE);
 
 			/* CBVS buffer address + half-frame length */
-			hws_write32(hws, CBVS_IN_BUF_BASE  + i * PCIE_BARADDROFSIZE,
-			            (i + 1) * PCIEBAR_AXI_BASE + pci_addr);
+			writel((i + 1) * PCIEBAR_AXI_BASE + pci_addr, hws->bar0_base + CBVS_IN_BUF_BASE  + i * PCIE_BARADDROFSIZE);
 
-			hws_write32(hws, CBVS_IN_BUF_BASE2 + i * PCIE_BARADDROFSIZE,
-			            hws->video[i].fmt_curr.half_size / 16);
+			writel(hws->video[i].fmt_curr.half_size / 16, hws->bar0_base + CBVS_IN_BUF_BASE2 + i * PCIE_BARADDROFSIZE);
 		}
 
 		/* ───────────── AUDIO tail entry ───────────── */
@@ -178,12 +175,12 @@ void hws_set_dma_address(struct hws_pcie_dev *hws)
 			dma_addr_t paddr  = hws->audio[i].buf_phys_addr;
 			u32 pci_addr     = lower_32_bits(paddr) & addr_low_mask;
 
-			hws_write32(hws,
-				CBVS_IN_BUF_BASE + (8 + i) * PCIE_BARADDROFSIZE,
-				(i + 1) * PCIEBAR_AXI_BASE + pci_addr);
+			writel((i + 1) * PCIEBAR_AXI_BASE + pci_addr, hws->bar0_base + 
+				CBVS_IN_BUF_BASE + (8 + i) * PCIE_BARADDROFSIZE
+				);
 		}
 	}
 
 	/* Enable PCIe interrupts for all sources */
-	hws_write32(hws, INT_EN_REG_BASE, 0x003fffff);
+	writel(0x003fffff, hws->bar0_base + INT_EN_REG_BASE);
 }

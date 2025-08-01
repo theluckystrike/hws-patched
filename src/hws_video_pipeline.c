@@ -104,7 +104,7 @@ void hws_enable_video_capture(struct hws_pcie_dev *hws,
         return;
 
     /* read-modify-write the bitmask register */
-    status = hws_read32(hws, HWS_REG_VCAP_ENABLE);
+    status = readl(hws->bar0_base + HWS_REG_VCAP_ENABLE);
     if (on)
         status |= BIT(chan);
     else
@@ -114,7 +114,7 @@ void hws_enable_video_capture(struct hws_pcie_dev *hws,
     hws->video[chan].cap_active = on;
 
     /* write it back */
-    hws_write32(hws, HWS_REG_VCAP_ENABLE, status);
+    writel(status, hdev->bar0_base + HWS_REG_VCAP_ENABLE);
 }
 
 void check_card_status(struct hws_pcie_dev *pdx)
@@ -202,7 +202,7 @@ void hws_init_video_sys(struct hws_pcie_dev *hws, bool enable)
         return;
 
     /* 1) reset the decoder mode register to 0 */
-    hws_write32(hws, HWS_REG_DEC_MODE, 0x00000000);
+    writel(0x00000000, hdev->bar0_base + HWS_REG_DEC_MODE);
 
     /* 2) point DMA pointers at our buffers */
     hws_set_dma_address(hws);
@@ -229,13 +229,13 @@ void hws_init_video_sys(struct hws_pcie_dev *hws, bool enable)
     }
 
     /* 4) enable all interrupts */
-    hws_write32(hws, INT_EN_REG_BASE, 0x003FFFFF);
+    writel(0x003FFFFF, hws->bar0_base + INT_EN_REG_BASE);
 
     /* 5) “Start run”: set bit31, wait a bit, then program low 24 bits */
-    hws_write32(hws, HWS_REG_DEC_MODE, 0x80000000);
+    writel(0x80000000, hws->bar0_base + HWS_REG_DEC_MODE);
     udelay(500);
-    hws_write32(hws, HWS_REG_DEC_MODE, 0x80FFFFFF);
-    hws_write32(hws, HWS_REG_DEC_MODE, 0x00000013);
+    writel(0x80FFFFFF, hws->bar0_base + HWS_REG_DEC_MODE);
+    writel(0x00000013, hws->bar0_base + HWS_REG_DEC_MODE);
 
     /* 6) record that we're now running */
     hws->start_run = true;

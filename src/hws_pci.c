@@ -5,7 +5,6 @@
 #include <media/v4l2-ctrls.h>
 
 #include "hws.h"
-#include "hws_init.h"
 #include "hws_dma.h"
 #include "hws_video_pipeline.h"
 #include "hws_audio_pipeline.h"
@@ -112,8 +111,7 @@ static void hws_configure_hardware_capabilities(struct hws_pcie_dev *hdev)
 		} else {
 			hdev->hw_ver = 1;
 			/* DMA max size is scaler size / 16 */
-			hws_write32(hdev, HWS_REG_DMA_MAX_SIZE,
-				    MAX_VIDEO_SCALER_SIZE >> 4);
+			writel(MAX_VIDEO_SCALER_SIZE >> 4, hdev->bar0_base + HWS_REG_DMA_MAX_SIZE);
 		}
 	} else {
 		hdev->hw_ver = 0;
@@ -126,7 +124,7 @@ static int read_chip_id(struct hws_pcie_dev *pdx)
 	int   i;
 
 	/* ── read the on-chip device-info register ─────────────────── */
-	reg = hws_read32(hdev, HWS_REG_DEVICE_INFO);
+	reg = readl(hdev->bar0_base + HWS_REG_DEVICE_INFO)
 
 	hdev->device_ver      = FIELD_GET(DEVINFO_VER,   reg);
 	hdev->sub_ver         = FIELD_GET(DEVINFO_SUBVER, reg);
@@ -147,8 +145,8 @@ static int read_chip_id(struct hws_pcie_dev *pdx)
 		set_video_format_size(hdev, i, 1920, 1080);
 
 	/* ── reset decoder core ───────────────────────────────────── */
-	hws_write32(hdev, HWS_REG_DEC_MODE, 0x00);
-	hws_write32(hdev, HWS_REG_DEC_MODE, 0x10);
+	writel(0x00, hdev->bar0_base + HWS_REG_DEC_MODE);
+	writel(0x10, hdev->bar0_base + HWS_REG_DEC_MODE);
 
 	hws_configure_hardware_capabilities(hdev);
 
@@ -296,7 +294,7 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
 	}
 
 	// in `hws_video_pipeline.c`
-	// FIXME: `EnableAudioCapture` sub method and `hws_write32`
+	// FIXME: `EnableAudioCapture` sub method
 	hws_init_video_sys(hws_dev, 0);
 
     // NOTE: there are two loops, the `video_data_process` and this where we have periodic checks
@@ -916,17 +914,6 @@ static int hws_irq_setup(struct hws_pcie_dev *hws)
              irq, hws->msi_enabled);
 
     return 0;
-}
-
-
-static inline void hws_write32(struct hws_pcie_dev *hdev, u32 off, u32 val)
-{
-	writel(val, hdev->bar0_base + off);
-}
-
-static inline u32 hws_read32(struct hws_pcie_dev *hdev, u32 off)
-{
-	return readl(hdev->bar0_base + off);
 }
 
 static struct pci_driver hws_pci_driver = {
