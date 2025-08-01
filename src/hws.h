@@ -427,7 +427,6 @@ struct hws_audio {
 | `irq_line`                | `irq_line`                  | `hws_pcie_dev` |
 | `msi_enabled`             | `msi_enabled` *(now bool)*  | `hws_pcie_dev` |
 | `msix_enabled`            | `msix_enabled` *(now bool)* | `hws_pcie_dev` |
-| `irq_user_count`          | `irq_user_cnt`              | `hws_pcie_dev` |
 | `entry[32]`               | `msix_entries[32]`          | `hws_pcie_dev` |
 | `dwVendorID`              | `vendor_id` *(u16)*         | `hws_pcie_dev` |
 | `dwDeviceID`              | `device_id` *(u16)*         | `hws_pcie_dev` |
@@ -465,7 +464,7 @@ struct hws_pcie_dev {
 	int                        irq_line;          /* < 0 = none */
 	bool                       msi_enabled;
 	bool                       msix_enabled;
-	int                        irq_user_cnt;
+	int                        irq_user_count;
 	struct msix_entry          msix_entries[32];
 
 	/* ───── device identity / capabilities ───── */

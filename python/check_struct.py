@@ -25,78 +25,78 @@ STRUCT_TEXT = r"""
 struct hws_pcie_dev {
 	struct pci_dev			*pdev;
 	struct uio_info info;
-	struct hws_audio		audio[MAX_VID_CHANNELS];
-	struct hws_video		video[MAX_VID_CHANNELS];
+	// struct hws_audio		audio[MAX_VID_CHANNELS];
+	// struct hws_video		video[MAX_VID_CHANNELS];
 	spinlock_t				videoslock[MAX_VID_CHANNELS];
 	spinlock_t				audiolock[MAX_VID_CHANNELS];
-	u32 *map_bar0_addr;
-	struct workqueue_struct *wq;
+	// u32 *map_bar0_addr;
+	// struct workqueue_struct *wq;
 	struct workqueue_struct *auwq;
 	unsigned long video_data[MAX_VID_CHANNELS];
  	struct tasklet_struct dpc_video_tasklet[MAX_VID_CHANNELS];
  	unsigned long audio_data[MAX_VID_CHANNELS];
  	struct tasklet_struct dpc_audio_tasklet[MAX_VID_CHANNELS];
 	int irq_line;		/* flag if irq allocated successfully */	
-	int msi_enabled;	/* flag if msi was enabled for the device */	
-	int msix_enabled;	/* flag if msi-x was enabled for the device */	
-	int irq_user_count;/* user interrupt count */     
-	int m_PciDeviceLost;
+	// int msi_enabled;	/* flag if msi was enabled for the device */	
+	// int msix_enabled;	/* flag if msi-x was enabled for the device */	
+	// int irq_user_count;/* user interrupt count */     
+	// int m_PciDeviceLost;
 	struct msix_entry entry[32];	
-	u32 dwDeviceID;
-	u32 dwVendorID;
-	u32 m_Device_Version;
-	int  m_DeviceHW_Version;
+	// u32 dwDeviceID;
+	// u32 dwVendorID;
+	// u32 m_Device_Version;
+	// int  m_DeviceHW_Version;
 	u32  m_Device_SupportYV12;
-	u32 m_Device_SubVersion;
-	u32 m_Device_PortID;
-	int  m_MaxHWVideoBufferSize;
-	int m_nMaxChl;
+	// u32 m_Device_SubVersion;
+	// u32 m_Device_PortID;
+	// int  m_MaxHWVideoBufferSize;
+	// int m_nMaxChl;
 	int m_nCurreMaxVideoChl;
-	int m_nCurreMaxLineInChl;
-	uint8_t m_bStartRun;	// Use for start run for check i2c
-	dma_addr_t   		m_pbyVideo_phys[MAX_VID_CHANNELS] ;
-    uint8_t		*m_pbyVideoBuffer[MAX_VID_CHANNELS];
-	u32		    m_dwVideoBuffer[MAX_VID_CHANNELS];
-	u32		    m_dwVideoHighBuffer[MAX_VID_CHANNELS];
+	// int m_nCurreMaxLineInChl;
+	// uint8_t m_bStartRun;	// Use for start run for check i2c
+	// dma_addr_t   		m_pbyVideo_phys[MAX_VID_CHANNELS] ;
+    // uint8_t		*m_pbyVideoBuffer[MAX_VID_CHANNELS];
+	// u32		    m_dwVideoBuffer[MAX_VID_CHANNELS];
+	// u32		    m_dwVideoHighBuffer[MAX_VID_CHANNELS];
 	VCAP_STATUS_INFO    m_pVCAPStatus[MAX_VID_CHANNELS][MAX_VIDEO_QUEUE];
 	ACAP_VIDEO_INFO m_VideoInfo[MAX_VID_CHANNELS];
 
 	VIDEO_INFO      	m_format[MAX_VID_CHANNELS];
 	
-	ACAP_AUDIO_INFO     m_AudioInfo[MAX_VID_CHANNELS];
+	// ACAP_AUDIO_INFO     m_AudioInfo[MAX_VID_CHANNELS];
 	uint8_t				m_bChangeVideoSize[MAX_VID_CHANNELS];
 	
 	struct task_struct *mMain_tsk; 
 	int m_curr_No_Video[MAX_VID_CHANNELS];
-	dma_addr_t   		m_pbyAudio_phys[MAX_VID_CHANNELS] ;
-	uint8_t     *m_pbyAudioBuffer[MAX_VID_CHANNELS];
-	uint8_t     *m_pAudioData[MAX_VID_CHANNELS];
-	uint8_t     *m_pAudioData_area[MAX_VID_CHANNELS];
-	uint8_t		m_bBufferAllocate;
-	u32		m_dwAudioBuffer[MAX_VID_CHANNELS];
-	u32		m_dwAudioBufferHigh[MAX_VID_CHANNELS];
+	// dma_addr_t   		m_pbyAudio_phys[MAX_VID_CHANNELS] ;
+	// uint8_t     *m_pbyAudioBuffer[MAX_VID_CHANNELS];
+	// uint8_t     *m_pAudioData[MAX_VID_CHANNELS];
+	// uint8_t     *m_pAudioData_area[MAX_VID_CHANNELS];
+	// uint8_t		m_bBufferAllocate;
+	// u32		m_dwAudioBuffer[MAX_VID_CHANNELS];
+	// u32		m_dwAudioBufferHigh[MAX_VID_CHANNELS];
 	uint8_t m_bVCapStarted[MAX_VID_CHANNELS];
-	uint8_t	 m_bACapStarted[MAX_VID_CHANNELS];
+	//uint8_t	 m_bACapStarted[MAX_VID_CHANNELS];
 	uint8_t     m_nVideoBusy[MAX_VID_CHANNELS];
 	uint8_t   m_bVideoStop[MAX_VID_CHANNELS];
 	int       m_nRDVideoIndex[MAX_VID_CHANNELS];
 	int        m_nVideoBufferIndex[MAX_VID_CHANNELS];
 	int       m_nVideoHalfDone[MAX_VID_CHANNELS];
-	uint8_t   m_nAudioBusy[MAX_VID_CHANNELS];
-	uint8_t   m_nAudioBufferIndex[MAX_VID_CHANNELS];
-	uint8_t	  m_pAudioEvent[MAX_VID_CHANNELS];
+	// uint8_t   m_nAudioBusy[MAX_VID_CHANNELS];
+	// uint8_t   m_nAudioBufferIndex[MAX_VID_CHANNELS];
+	// uint8_t	  m_pAudioEvent[MAX_VID_CHANNELS];
 	uint8_t		m_pVideoEvent[MAX_VID_CHANNELS];
 	uint8_t		m_bVCapIntDone[MAX_VID_CHANNELS];
-	uint8_t m_bAudioRun[MAX_VID_CHANNELS];
-	uint8_t m_bAudioStop[MAX_VID_CHANNELS];
-	int       m_nRDAudioIndex[MAX_VID_CHANNELS];
-	u32       m_dwAudioPTKSize;
+	// uint8_t m_bAudioRun[MAX_VID_CHANNELS];
+	// uint8_t m_bAudioStop[MAX_VID_CHANNELS];
+	// int       m_nRDAudioIndex[MAX_VID_CHANNELS];
+	// u32       m_dwAudioPTKSize;
 	int m_dwSWFrameRate[MAX_VID_CHANNELS];
 
-	ULONG m_contrast[MAX_VID_CHANNELS];
-	ULONG m_brightness[MAX_VID_CHANNELS];
-	ULONG m_saturation[MAX_VID_CHANNELS];
-	ULONG m_hue[MAX_VID_CHANNELS];
+	// ULONG m_contrast[MAX_VID_CHANNELS];
+	// ULONG m_brightness[MAX_VID_CHANNELS];
+	// ULONG m_saturation[MAX_VID_CHANNELS];
+	// ULONG m_hue[MAX_VID_CHANNELS];
 	
 };
 """

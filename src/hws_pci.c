@@ -440,7 +440,7 @@ void hws_remove(struct pci_dev *pdev)
 	struct video_device *vdev;
 	struct hws_pcie_dev *dev = (struct hws_pcie_dev *)pci_get_drvdata(pdev);
 	//----------------------------
-	if (dev->map_bar0_addr == NULL)
+	if (!dev->bar0_base)
 		return;
 	hws_stop_device(dev);
 	/* disable interrupts */
@@ -475,14 +475,14 @@ void hws_remove(struct pci_dev *pdev)
 		v4l2_ctrl_handler_free(&dev->video[i].ctrl_handler);
 	}
 	//-----------------
-	if (dev->wq) {
-		destroy_workqueue(dev->wq);
+	if (dev->video_wq) {
+		destroy_workqueue(dev->video_wq);
 	}
 
 	if (dev->auwq) {
 		destroy_workqueue(dev->auwq);
 	}
-	dev->wq = NULL;
+	dev->video_wq = NULL;
 	dev->auwq = NULL;
 	//free_irq(dev->pdev->irq, dev);
 

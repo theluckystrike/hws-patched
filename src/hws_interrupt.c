@@ -100,11 +100,11 @@ static irqreturn_t irqhandler(int irq, void *info)
 
             ack_mask |= abit;
 
-            if (pdx->m_nAudioBusy[ch] == 0) {
+            if (pdx->audio[ch].dma_busy == 0) {
                 /* Read which half of the audio ring is active */
                 u32 toggle = READ_REGISTER_ULONG(pdx, HWS_REG_ABUF_TOGGLE(ch)) & 0x01;
 
-                pdx->m_nAudioBufferIndex[ch] = toggle;
+                pdx->audio[ch].wr_idx = toggle;
                 pdx->audio_data[ch]         = toggle;
                 tasklet_schedule(&pdx->dpc_audio_tasklet[ch]);
             }
@@ -169,7 +169,7 @@ static void hws_dpc_video(unsigned long data)
                 hws->m_bVCapIntDone[ch] = false;
 
                 if (!hws->m_bChangeVideoSize[ch]) {
-                        queue_work(hws->wq, &hws->video[ch].videowork);
+                        queue_work(hws->video_wq, &hws->video[ch].videowork);
                 } else {
                         hws->m_bChangeVideoSize[ch] = 0;
                 }

@@ -171,7 +171,7 @@ int hws_vidioc_querycap(struct file *file, void *priv,
 	struct hws_pcie_dev *dev = videodev->dev;
 	int vi_index;
 	vi_index = videodev->index + 1 +
-		   dev->m_Device_PortID * dev->m_nCurreMaxVideoChl;
+		   dev->port_id * dev->m_nCurreMaxVideoChl;
 
 	strlcpy(cap->driver, KBUILD_MODNAME, sizeof(cap->driver));
 	snprintf(cap->card, sizeof(cap->card), "%s %d", HWS_VIDEO_NAME, vi_index);

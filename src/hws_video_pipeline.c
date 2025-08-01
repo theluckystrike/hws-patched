@@ -420,7 +420,7 @@ int get_video_status(struct hws_pcie_dev *pdx, unsigned int ch)
     if (!update_active_and_interlace_flags(pdx, ch))
         return 1;                         /* no active video */
 
-    if (pdx->m_DeviceHW_Version > 0)
+    if (pdx->hw_ver> 0)
         handle_hwv2_path(pdx, ch);
     else
         // FIXME: legacy struct names in subfunction
@@ -452,7 +452,7 @@ static void init_copy_ctx(struct hws_pcie_dev *pdx, int dec,
     c->copy_sz   = (c->buf_idx == 1) ? c->half_sz
                       : pdx->m_format[dec].DWON_SIZE;
 
-    u8 *base     = pdx->m_pbyVideoBuffer[dec];
+    u8 *base     = pdx->video[dec].buf_virt;
     c->pSrc      = base + (c->buf_idx ? 0 : c->half_sz);
     int lines    = c->copy_sz / c->pitch;
     c->pMask     = (int *)(c->pSrc + c->copy_sz -
@@ -500,8 +500,8 @@ static void copy_and_update(struct hws_pcie_dev *pdx, int dec,
         dst += c->half_sz;
 
     dma_sync_single_for_cpu(&pdx->pdev->dev,
-                            pdx->m_pbyVideo_phys[dec],
-                            pdx->m_MaxHWVideoBufferSize,
+                            pdx->video[dec].buf_phys_addr,
+                            pdx->max_hw_video_buf_sz,
                             DMA_FROM_DEVICE);
     memcpy(dst, c->pSrc, c->copy_sz);
 
