@@ -166,28 +166,13 @@ void StopVideoCapture(struct hws_pcie_dev *pdx, int index)
 {
 	//int inc=0;
 
-	if (pdx->m_bVCapStarted[index] == 0)
+	if (pdx->video[index].cap_active == 0)
 		return;
 	//pdx->m_nVideoIndex[index] =0;
 	pdx->m_VideoInfo[index].dwisRuning = 0;
-	pdx->m_bVideoStop[index] = 1;
+	pdx->video[index].stop_requested = 1;
 	pdx->m_pVideoEvent[index] = 0;
 	pdx->m_bChangeVideoSize[index] = 0;
-#if 0
-	while(1)
-	{
-		if(pdx->m_bVideoStop[index] ==0)
-		{
-			break;
-		}
-		inc++;
-		if(inc >2000)
-		{
-			break;
-		}
-		msleep(10);
-	}
-#endif
 	hws_enable_video_capture(pdx, index, false);
 	pdx->m_bVCapIntDone[index] = 0;
 }
@@ -445,12 +430,12 @@ static void init_copy_ctx(struct hws_pcie_dev *pdx, int dec,
 {
     int w  = pdx->m_pVCAPStatus[dec][0].dwWidth;
     c->interlace = pdx->m_pVCAPStatus[dec][0].dwinterlace;
-    c->pitch     = pdx->m_Device_SupportYV12 ? w * 12 / 8 : w * 2;
+    c->pitch     = pdx->support_yv12 ? w * 12 / 8 : w * 2;
 
     c->buf_idx   = pdx->m_nVideoBufferIndex[dec];
-    c->half_sz   = pdx->m_format[dec].HLAF_SIZE;
+    c->half_sz   = pdx->video[dec].fmt_curr.half_size;
     c->copy_sz   = (c->buf_idx == 1) ? c->half_sz
-                      : pdx->m_format[dec].DWON_SIZE;
+                      : pdx->video[dec].fmt_curr.down_size;
 
     u8 *base     = pdx->video[dec].buf_virt;
     c->pSrc      = base + (c->buf_idx ? 0 : c->half_sz);
@@ -622,7 +607,7 @@ void video_data_process(struct work_struct *work)
     // in CheckVideoFormat
     // CheckVideoFormat gets called from MainKsThreadHandle, which loops
     // endlessly and checks every second, with a slieep
-	if (pdx->m_curr_No_Video[dev->index])
+	if (pdx->video[dev->index].singal_loss_cnt)
 		hws_fill_no_signal(dev, &ctx);
 	else
 		hws_transform_frame(dev, &ctx);
@@ -675,7 +660,7 @@ static int hws_fetch_buffers(struct hws_video *dev,
 		c->src_h *= 2;
 
 	/* ---------------- select source frame from PCIe ring --------------- */
-	if (pdx->m_curr_No_Video[ch] == 0) {
+	if (pdx->video[ch].signal_loss_cnt == 0) {
 		for (i = pdx->m_nRDVideoIndex[ch]; i < MAX_VIDEO_QUEUE; i++) {
 			if (pdx->m_VideoInfo[ch].pStatusInfo[i].byLock ==
 			    MEM_LOCK) {
@@ -706,7 +691,7 @@ static int hws_fetch_buffers(struct hws_video *dev,
 	spin_unlock_irqrestore(&pdx->videoslock[ch], *flags);
 
 	/* ---------------- compute format-specific copy size --------------- */
-	switch (pdx->m_Device_SupportYV12) {
+	switch (pdx->support_yv12) {
 	case 1: /* YV12 */
 		c->copy_size = c->src_w * c->src_h * 12 / 8;
 		break;
@@ -728,7 +713,7 @@ static void hws_transform_frame(struct hws_video *dev, struct frame_ctx *c)
 	u8 *work = pdx->m_VideoInfo[ch].m_pVideoYUV2Buf;
 
 	/* 1. Yx12/NV12 → YUY2 or de-interlace passthrough ---------------- */
-	switch (pdx->m_Device_SupportYV12) {
+	switch (pdx->support_yv12) {
 	case 1:
 		memcpy(work, c->src, c->copy_size);
 		FillYUU2(work, work, c->src_w, c->src_h, c->interlace);

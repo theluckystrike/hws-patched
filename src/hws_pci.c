@@ -446,9 +446,8 @@ void hws_remove(struct pci_dev *pdev)
 	/* disable interrupts */
 	hws_free_irqs(dev);
 
-    // FIXME 
-	if (pdx->mMain_tsk) {
-		kthread_stop(pdx->mMain_tsk);
+	if (pdx->main_task) {
+		kthread_stop(pdx->main_task);
 	}
 
 	//printk("hws_remove  0\n");
@@ -458,7 +457,7 @@ void hws_remove(struct pci_dev *pdev)
 	}
 	//-------------------------
 	//printk("hws_remove  1\n");
-	for (i = 0; i < dev->m_nCurreMaxVideoChl; i++) {
+	for (i = 0; i < dev->cur_max_video_ch; i++) {
 		if (dev->audio[i].resampled_buf) {
 			vfree(dev->audio[i].resampled_buf);
 			dev->audio[i].resampled_buf = NULL;
@@ -468,7 +467,7 @@ void hws_remove(struct pci_dev *pdev)
 			dev->audio[i].card = NULL;
 		}
 	}
-	for (i = 0; i < dev->m_nCurreMaxVideoChl; i++) {
+	for (i = 0; i < dev->cur_max_video_ch; i++) {
 		vdev = &dev->video[i].vdev;
 		video_unregister_device(vdev);
 		v4l2_device_unregister(&dev->video[i].v4l2_dev);
@@ -479,11 +478,11 @@ void hws_remove(struct pci_dev *pdev)
 		destroy_workqueue(dev->video_wq);
 	}
 
-	if (dev->auwq) {
-		destroy_workqueue(dev->auwq);
+	if (dev->audio_wq) {
+		destroy_workqueue(dev->audio_wq);
 	}
 	dev->video_wq = NULL;
-	dev->auwq = NULL;
+	dev->audio_wq = NULL;
 	//free_irq(dev->pdev->irq, dev);
 
 	iounmap(dev->info.mem[0].internal_addr);

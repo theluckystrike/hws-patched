@@ -162,7 +162,7 @@ static void hws_dpc_video(unsigned long data)
         unpack_dev_ch(data, &hws, &ch);
 
         ret = hws_set_queue(hws, ch);
-        if (ret || !hws->m_bVCapStarted[ch])
+        if (ret || !hws->video[ch].cap_active)
                 return;
 
         if (hws->m_bVCapIntDone[ch] && hws->m_pVideoEvent[ch]) {

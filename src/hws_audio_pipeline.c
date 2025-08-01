@@ -541,7 +541,7 @@ static void hws_audio_unregister(struct hws_pcie_dev *hws)
         return;
 
     /* For each channel, cancel work, free the ALSA card, and drop the resample buffer */
-    for (i = 0; i < hws->m_nCurreMaxVideoChl; i++) {
+    for (i = 0; i < hws->cur_max_video_ch; i++) {
         struct hws_audio *aud = &hws->audio[i];
 
         /* Make sure any in-flight work is done */
@@ -559,6 +559,6 @@ static void hws_audio_unregister(struct hws_pcie_dev *hws)
     }
 
     dev_info(&hws->pdev->dev, "audio unregistered (%d channels)\n",
-             hws->m_nCurreMaxVideoChl);
+             hws->cur_max_video_ch);
 }
 
