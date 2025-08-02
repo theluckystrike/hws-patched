@@ -168,6 +168,8 @@ static void hws_audio_cleanup_channel(struct hws_pcie_dev *pdev, int ch);
 static int probe_scan_for_msi(struct hws_pcie_dev *hws, struct pci_dev *pdev);
 static void hws_disable_msi(struct hws_pcie_dev *hws_dev);
 static void hws_video_cleanup_channel(struct hws_pcie_dev *pdev, int ch);
+static void hws_remove(struct pci_dev *pdev);
+
 #ifndef arch_msi_check_device
 int arch_msi_check_device(struct pci_dev *dev, int nvec, int type);
 #endif
@@ -221,7 +223,7 @@ static void hws_adapters_init(struct hws_pcie_dev *dev)
 static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id)
 {
 	struct hws_pcie_dev *hws_dev;
-	int err = 0, ret = -ENODEV;
+	int ret = -ENODEV;
 	int j, i;
 
 	hws_dev = hws_alloc_dev_instance(pci_dev);
@@ -238,16 +240,16 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
 	dev_info(&pci_dev->dev, "Device VID=0x%04x, DID=0x%04x\n",
 		 pci_dev->vendor, pci_dev->device);
 
-	err = pci_enable_device(pci_dev);
-	if (err) {
+	ret = pci_enable_device(pci_dev);
+	if (ret) {
 		dev_err(&pci_dev->dev, "%s: pci_enable_device failed: %d\n",
-			__func__, err);
+			__func__, ret);
 		goto err_free_dev;
 	}
 
-    err = pci_request_regions(pci_dev, DRV_NAME);
-    if (err) {
-        dev_err(&pci_dev->dev, "pci_request_regions failed: %d\n", err);
+    ret = pci_request_regions(pci_dev, DRV_NAME);
+    if (ret) {
+        dev_err(&pci_dev->dev, "pci_request_regions failed: %d\n", ret);
         goto err_disable_device;
     }
 
@@ -340,15 +342,15 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
 	return 0;
 
 err_unregister_video:
-	hws_video_unregister(hws);
+	hws_video_unregister(hws_dev);
 err_destroy_wq:
-        destroy_workqueue(hws->video_wq);
-        destroy_workqueue(hws->audio_wq);
+        destroy_workqueue(hws_dev->video_wq);
+        destroy_workqueue(hws_dev->audio_wq);
 err_stop_thread:
         if (!IS_ERR_OR_NULL(hws_dev->main_task))
                 kthread_stop(hws_dev->main_task);
 err_free_dma:
-        hws_dma_mem_free(hws);
+        hws_dma_mem_free(hws_dev);
 err_cleanup_channels:
     /* undo channels [0 .. i-1] */
     for (j = i - 1; j >= 0; j--) {
@@ -358,13 +360,12 @@ err_cleanup_channels:
 err_disable_msi:
     hws_disable_msi(hws_dev);
 err_unmap_bar:
-        pci_iounmap(pdev, hws->bar0_base);
+        pci_iounmap(pci_dev, hws_dev->bar0_base);
 err_release_regions:
-        pci_release_regions(pdev);
+        pci_release_regions(pci_dev);
 err_disable_device:
-        pci_disable_device(pdev);
+        pci_disable_device(pci_dev);
 err_free_dev:
-        kfree(hws);
         return ret;
 }
 
@@ -440,7 +441,7 @@ static void hws_stop_device(struct hws_pcie_dev *hws)
     dev_dbg(&hws->pdev->dev, "hws_stop_device: complete\n");
 }
 
-void hws_remove(struct pci_dev *pdev)
+static void hws_remove(struct pci_dev *pdev)
 {
 	int i;
 	struct video_device *vdev;

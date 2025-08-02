@@ -5,6 +5,7 @@
 #include "hws.h"
 
 int hws_dma_mem_alloc(struct hws_pcie_dev *hws);
+void hws_dma_mem_free(struct hws_pcie_dev *hws);
 void dma_mem_free_pool(struct hws_pcie_dev *pdx);
 void set_dma_address(struct hws_pcie_dev *pdx);
 

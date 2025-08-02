@@ -3,7 +3,7 @@
 #include "hws_pci.h"
 
 
-static void hws_dma_mem_free(struct hws_pcie_dev *hws)
+void hws_dma_mem_free(struct hws_pcie_dev *hws)
 {
     struct device *dev = &hws->pdev->dev;
     int i;
