@@ -22,8 +22,9 @@
 #define DEVINFO_HWKEY        GENMASK(27, 24)
 #define DEVINFO_PORTID       GENMASK(25, 24)   /* low 2 bits of HW-key */
 
-#define MAX_MM_VIDEO_SIZE     (1920 * 1080 * 2)
-#define MAX_DMA_AUDIO_PK_SIZE (128 * 16 * 4)
+// FIXME: these are redefined once in hws.h and once here, figure out which is right
+// #define MAX_MM_VIDEO_SIZE     (1920 * 1080 * 2)
+// #define MAX_DMA_AUDIO_PK_SIZE (128 * 16 * 4)
 
 
 #define MAKE_ENTRY( __vend, __chip, __subven, __subdev, __configptr) {	\
@@ -111,20 +112,21 @@ static void hws_configure_hardware_capabilities(struct hws_pcie_dev *hdev)
 		} else {
 			hdev->hw_ver = 1;
 			/* DMA max size is scaler size / 16 */
-			writel(MAX_VIDEO_SCALER_SIZE >> 4, hdev->bar0_base + HWS_REG_DMA_MAX_SIZE);
+			// FIXME: not compiling
+			// writel(MAX_VIDEO_SCALER_SIZE >> 4, hdev->bar0_base + HWS_REG_DMA_MAX_SIZE);
 		}
 	} else {
 		hdev->hw_ver = 0;
 	}
 }
 
-static int read_chip_id(struct hws_pcie_dev *pdx)
+static int read_chip_id(struct hws_pcie_dev *hdev)
 {
 	u32   reg;
 	int   i;
 
 	/* ── read the on-chip device-info register ─────────────────── */
-	reg = readl(hdev->bar0_base + HWS_REG_DEVICE_INFO)
+	reg = readl(hdev->bar0_base + HWS_REG_DEVICE_INFO);
 
 	hdev->device_ver      = FIELD_GET(DEVINFO_VER,   reg);
 	hdev->sub_ver         = FIELD_GET(DEVINFO_SUBVER, reg);
@@ -158,9 +160,17 @@ static int read_chip_id(struct hws_pcie_dev *pdx)
 	return 0;
 }
 
-int hws_video_init_channel(struct hws_pcie_dev *dev, int idx);
-int hws_audio_init_channel(struct hws_pcie_dev *dev, int idx);
-int hws_irq_setup(struct hws_pcie_dev *hws);
+static int hws_video_init_channel(struct hws_pcie_dev *dev, int idx);
+static int hws_audio_init_channel(struct hws_pcie_dev *dev, int idx);
+static int hws_irq_setup(struct hws_pcie_dev *hws);
+static struct hws_pcie_dev *hws_alloc_dev_instance(struct pci_dev *pdev);
+static void hws_audio_cleanup_channel(struct hws_pcie_dev *pdev, int ch);
+static int probe_scan_for_msi(struct hws_pcie_dev *hws, struct pci_dev *pdev);
+static void hws_disable_msi(struct hws_pcie_dev *hws_dev);
+static void hws_video_cleanup_channel(struct hws_pcie_dev *pdev, int ch);
+#ifndef arch_msi_check_device
+int arch_msi_check_device(struct pci_dev *dev, int nvec, int type);
+#endif
 
 static int main_ks_thread_handle(void *data)
 {
@@ -197,13 +207,13 @@ static void hws_adapters_init(struct hws_pcie_dev *dev)
 	int width, height;
 	for (index = 0; index < MAX_VID_CHANNELS; index++) {
 		width = dev->video[index].queue_status[0].width;
-		height = dev->video[index].queue_status.height;
+		height = dev->video[index].queue_status->height;
 
-		dev->video[index].current_out_pixfmt = 0;
-		dev->video[index].current_out_size_index = 0;
-		dev->video[index].current_out_width = width;
-		dev->video[index].curren_out_height = height;
-		dev->video[index].current_out_framerate = 60;
+		dev->video[index].output_pixel_format = 0;
+		dev->video[index].output_size_index = 0;
+		dev->video[index].output_width = width;
+		dev->video[index].output_height = height;
+		dev->video[index].output_frame_rate = 60;
 		dev->video[index].interlaced = false;
 	}
 }
@@ -223,8 +233,8 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
 
 	hws_dev->pdev = pci_dev;
 
-	hws_dev->device_id = hws_dev->pci_dev->device;
-	hws_dev->vendor_id = hws_dev->pci_dev->vendor;
+	hws_dev->device_id = hws_dev->pdev->device;
+	hws_dev->vendor_id = hws_dev->pdev->vendor;
 	dev_info(&pci_dev->dev, "Device VID=0x%04x, DID=0x%04x\n",
 		 pci_dev->vendor, pci_dev->device);
 
@@ -269,7 +279,7 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
 	hws_dev->video_wq = NULL;
 	hws_dev->audio_wq = NULL;
 
-	ret = hws_irq_setup(hws_dev, pci_dev);
+	ret = hws_irq_setup(hws_dev);
 	if (ret) {
         dev_err(&pci_dev->dev, "%s: IRQ setup failed: %d\n",
                 __func__, ret);
@@ -279,11 +289,11 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
 	pci_set_drvdata(pci_dev, hws_dev);
 	read_chip_id(hws_dev);
     /* Initialize each video/audio channel */
-    for (i = 0; i < dev->max_channels; i++) {
-        ret = hws_video_init_channel(dev, i);
+    for (i = 0; i < hws_dev->max_channels; i++) {
+        ret = hws_video_init_channel(hws_dev, i);
         if (ret)
             goto err_cleanup_channels;
-        ret = hws_audio_init_channel(dev, i);
+        ret = hws_audio_init_channel(hws_dev, i);
         if (ret)
             goto err_cleanup_channels;
     }
@@ -300,7 +310,7 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
     // whereas the `video_data_process` checks a m_curr_No_Video instance which has since been refactored
    
     // FIXME: figure out if we can check update_hpd_status early and exit fast
-    hws->main_task = kthread_run(main_ks_thread_handle, (void *)hws_dev, "start_ks_thread_task")
+    hws_dev->main_task = kthread_run(main_ks_thread_handle, (void *)hws_dev, "start_ks_thread_task");
     if (IS_ERR(hws_dev->main_task)) {
             ret = PTR_ERR(hws_dev->main_task);
             hws_dev->main_task = NULL;
@@ -467,7 +477,7 @@ void hws_remove(struct pci_dev *pdev)
 		vdev = &dev->video[i].vdev;
 		video_unregister_device(vdev);
 		v4l2_device_unregister(&dev->video[i].v4l2_dev);
-		v4l2_ctrl_handler_free(&dev->video[i].ctrl_handler);
+		v4l2_ctrl_handler_free(&dev->video[i].control_handler);
 	}
 	//-----------------
 	if (dev->video_wq) {
@@ -518,7 +528,6 @@ static int hws_video_init_channel(struct hws_pcie_dev *pdev, int ch)
 	vid->query_index         = 0;
 
 	/* default incoming signal info */
-	vid->tv_standard         = V4L2_STD_NTSC_M;
 	vid->pixel_format        = V4L2_PIX_FMT_YUYV;
 
 	/* default outgoing (scaled) geometry */

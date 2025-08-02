@@ -11,7 +11,7 @@
  * @dev:    your driver’s private hws_pcie_dev
  */
 void hws_free_irqs(struct hws_pcie_dev *dev);
-int hws_irq_setup(struct hws_pcie_dev *lro, struct pci_dev *pdev);
+irqreturn_t irqhandler(int irq, void *info);
 
 void DpcForIsr_Audio0(unsigned long data);
 void DpcForIsr_Audio1(unsigned long data);

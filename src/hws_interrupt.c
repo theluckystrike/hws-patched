@@ -50,7 +50,7 @@ static int hws_set_queue(struct hws_pcie_dev *hws, unsigned int ch)
 /* Interrupt handler. Read/modify/write the command register to disable
  * the interrupt. */
 //static irqreturn_t irqhandler(int irq, struct uio_info *info)
-static irqreturn_t irqhandler(int irq, void *info)
+irqreturn_t irqhandler(int irq, void *info)
 {
     struct hws_pcie_dev *pdx = info;
     u32 sys_status = READ_REGISTER_ULONG(pdx, HWS_REG_SYS_STATUS);
