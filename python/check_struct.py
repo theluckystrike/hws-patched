@@ -23,7 +23,7 @@ from pycparser import c_parser, c_ast, plyparser
 # ✂️  PASTE YOUR STRUCT DEFINITION BETWEEN THE TRIPLE QUOTES  ✂️
 STRUCT_TEXT = r"""
 struct hws_pcie_dev {
-	struct pci_dev			*pdev;
+	// struct pci_dev			*pdev;
 	struct uio_info info;
 	// struct hws_audio		audio[MAX_VID_CHANNELS];
 	// struct hws_video		video[MAX_VID_CHANNELS];
@@ -79,14 +79,14 @@ struct hws_pcie_dev {
 	//uint8_t	 m_bACapStarted[MAX_VID_CHANNELS];
 	// uint8_t     m_nVideoBusy[MAX_VID_CHANNELS];
 	// uint8_t   m_bVideoStop[MAX_VID_CHANNELS];
-	int       m_nRDVideoIndex[MAX_VID_CHANNELS];
+	// int       m_nRDVideoIndex[MAX_VID_CHANNELS];
 	// int        m_nVideoBufferIndex[MAX_VID_CHANNELS];
-	int       m_nVideoHalfDone[MAX_VID_CHANNELS];
+	// int       m_nVideoHalfDone[MAX_VID_CHANNELS];
 	// uint8_t   m_nAudioBusy[MAX_VID_CHANNELS];
 	// uint8_t   m_nAudioBufferIndex[MAX_VID_CHANNELS];
 	// uint8_t	  m_pAudioEvent[MAX_VID_CHANNELS];
 	// uint8_t		m_pVideoEvent[MAX_VID_CHANNELS];
-	uint8_t		m_bVCapIntDone[MAX_VID_CHANNELS];
+	// uint8_t		m_bVCapIntDone[MAX_VID_CHANNELS];
 	// uint8_t m_bAudioRun[MAX_VID_CHANNELS];
 	// uint8_t m_bAudioStop[MAX_VID_CHANNELS];
 	// int       m_nRDAudioIndex[MAX_VID_CHANNELS];
