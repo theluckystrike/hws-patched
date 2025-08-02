@@ -4,7 +4,6 @@
 #include "hws.h"
 #include "hws_reg.h"
 #include "hws_pci.h"
-#include "hws_scaler.h"
 #include "hws_init.h"
 #include "hws_dma.h"
 #include "hws_audio_pipeline.h"

@@ -10,7 +10,6 @@
 #include "hws_reg.h"
 #include "hws_dma.h"
 #include "hws_video.h"
-#include "hws_scaler.h"
 #include "hws_interrupt.h"
 #include "hws_v4l2_ioctl.h"
 #include "hws_video_pipeline.h"
