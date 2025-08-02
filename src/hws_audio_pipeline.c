@@ -53,9 +53,8 @@ int hws_start_audio_capture(struct hws_pcie_dev *hws, unsigned int index)
 
     /* Reset ring pointers and data pointer */
 
-    // FIXME: these are in video struct instead of the audio struct
-    hws->wr_idx[ch]   = 0;
-    hws->rd_idx[ch]   = 0;
+    hws->audio[ch].wr_idx   = 0;
+    hws->audio[ch].rd_idx   = 0;
     hws->data_buf[ch] = NULL;
 
     /* Unlock any leftover buffers in the queue */
@@ -84,9 +83,8 @@ static void hws_stop_audio_capture(struct hws_pcie_dev *hws,
     hws->stream_running[ch] = false;
     hws->stop_requested[ch] = true;
 
-    // FIXME: these are in video struct instead of the audio struct
     /* reset write pointer for a fresh restart */
-    hws->wr_idx[ch] = 0;
+    hws->audio[ch].wr_idx = 0;
 
     /* disable the work‑queue handler */
     hws->audio_info[ch].is_running = false;
@@ -247,7 +245,7 @@ void audio_data_process(struct work_struct *work)
 	const unsigned int    ch   = chan->channel_index;         /* was index */
 	unsigned long flags;
 	int          i;
-	int          rd          = hws->rd_idx[ch];
+	int          rd          = hws->audio[ch].rd_idx;
 	u8          *buf         = NULL;
 	u32          len         = 0;
 
@@ -261,7 +259,7 @@ void audio_data_process(struct work_struct *work)
 
 			/* Hand the buffer over to userspace and release it          */
 			hws->audio_info[ch].status[idx].lock = MEM_UNLOCK;
-			hws->rd_idx[ch] = (idx + 1) % MAX_AUDIO_QUEUE;
+			hws->audio[ch].rd_idx = (idx + 1) % MAX_AUDIO_QUEUE;
 			break;
 		}
 	}

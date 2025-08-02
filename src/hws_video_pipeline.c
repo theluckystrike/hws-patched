@@ -148,13 +148,13 @@ int StartVideoCapture(struct hws_pcie_dev *pdx, int index)
 		pdx->m_pVCAPStatus[index][j].byPath = 2;
 		pdx->m_VideoInfo[index].pStatusInfo[j].byLock = MEM_UNLOCK;
 	}
-	pdx->m_nRDVideoIndex[index] = 0;
+	pdx->video[index].rd_idx = 0;
 	pdx->m_VideoInfo[index].dwisRuning = 1;
 	pdx->m_VideoInfo[index].m_nVideoIndex = 0;
 	//spin_unlock_irqrestore(&pdx->videoslock[index], flags);
 
 	pdx->m_bChangeVideoSize[index] = 0;
-	pdx->m_bVCapIntDone[index] = 1;
+	pdx->video[index].irq_done_flag = 1;
 	pdx->video[index].irq_event = 1;
 	pdx->video[index].dma_busy = 0;
 	pdx->video_data[index] = 0;
@@ -174,7 +174,7 @@ void StopVideoCapture(struct hws_pcie_dev *pdx, int index)
 	pdx->video[index].irq_event = 0;
 	pdx->m_bChangeVideoSize[index] = 0;
 	hws_enable_video_capture(pdx, index, false);
-	pdx->m_bVCapIntDone[index] = 0;
+	pdx->video[index].irq_done_flag = 0;
 }
 
 void check_video_format(struct hws_pcie_dev *pdx)
@@ -451,8 +451,8 @@ static bool mask_skip_this_half(struct hws_pcie_dev *pdx, int dec,
         return false;                     /* ready to consume   */
 
     /* mask already set  → update half-done bookkeeping */
-    if (pdx->m_nVideoHalfDone[dec])
-        pdx->m_nVideoHalfDone[dec] = 0;
+    if (pdx->video[dec].half_done_cnt)
+        pdx->video[dec].half_done_cnt = 0;
     return true;                          /* skip copy */
 }
 
@@ -508,7 +508,7 @@ static void copy_and_update(struct hws_pcie_dev *pdx, int dec,
 
         spin_unlock_irqrestore(&pdx->videoslock[dec], flags);
     } else {
-        pdx->m_nVideoHalfDone[dec] = 1;   /* first half done  */
+        pdx->video[dec].half_done_cnt = 1;   /* first half done  */
     }
 }
 
@@ -536,7 +536,7 @@ int MemCopyVideoToStream(struct hws_pcie_dev *pdx, int dec)
     /* 4. lock & obtain destination buffer ‐ returns NULL on miss    */
     u8 *dst = get_write_buf(pdx, dec, &ctx);
     if (!dst) {                     /* no free buffer this pass */
-        pdx->m_nVideoHalfDone[dec] = 0;
+        pdx->video[dec].half_done_cnt = 0;
         *ctx.pMask = FRAME_DONE_MARK;
         return 0;
     }
@@ -661,7 +661,7 @@ static int hws_fetch_buffers(struct hws_video *dev,
 
 	/* ---------------- select source frame from PCIe ring --------------- */
 	if (pdx->video[ch].signal_loss_cnt == 0) {
-		for (i = pdx->m_nRDVideoIndex[ch]; i < MAX_VIDEO_QUEUE; i++) {
+		for (i = pdx->video[ch].rd_idx; i < MAX_VIDEO_QUEUE; i++) {
 			if (pdx->m_VideoInfo[ch].pStatusInfo[i].byLock ==
 			    MEM_LOCK) {
 				c->src_idx = i;
@@ -770,9 +770,9 @@ static void hws_release_src(struct hws_video *dev,
 		spin_lock_irqsave(&pdx->videoslock[ch], flags);
 
 		pdx->m_VideoInfo[ch].pStatusInfo[c->src_idx].byLock = MEM_UNLOCK;
-		pdx->m_nRDVideoIndex[ch] = c->src_idx + 1;
-		if (pdx->m_nRDVideoIndex[ch] >= MAX_VIDEO_QUEUE)
-			pdx->m_nRDVideoIndex[ch] = 0;
+		pdx->video[ch].rd_idx = c->src_idx + 1;
+		if (pdx->video[ch].rd_idx >= MAX_VIDEO_QUEUE)
+			pdx->video[ch].rd_idx = 0;
 
 		spin_unlock_irqrestore(&pdx->videoslock[ch], flags);
 	}

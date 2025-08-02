@@ -75,7 +75,7 @@ static irqreturn_t irqhandler(int irq, void *info)
                 continue;
 
             /* Mark this channel’s capture-done flag */
-            pdx->m_bVCapIntDone[ch] = 1;
+            pdx->video[ch].irq_done_flag = 1;
             ack_mask |= vbit;
 
             if (pdx->video[ch].dma_busy == 0) {
@@ -87,7 +87,7 @@ static irqreturn_t irqhandler(int irq, void *info)
                     pdx->audio[ch].wr_idx = toggle;
                     tasklet_schedule(&pdx->dpc_video_tasklet[ch]);
                 } else {
-                    pdx->m_nVideoHalfDone[ch] = 0;
+                    pdx->video[ch].half_done_cnt = 0;
                 }
             }
         }
@@ -157,8 +157,8 @@ static void hws_dpc_video(unsigned long data)
         if (ret || !hws->video[ch].cap_active)
                 return;
 
-        if (hws->m_bVCapIntDone[ch] && hws->video[ch].irq_event) {
-                hws->m_bVCapIntDone[ch] = false;
+        if (hws->video[ch].irq_done_flag && hws->video[ch].irq_event) {
+                hws->video[ch].irq_done_flag  = false;
 
                 if (!hws->m_bChangeVideoSize[ch]) {
                         queue_work(hws->video_wq, &hws->video[ch].videowork);
