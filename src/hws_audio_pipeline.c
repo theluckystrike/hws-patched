@@ -161,7 +161,7 @@ static int hws_copy_audio_to_stream(struct hws_pcie_dev *hws,
     return 0;
 }
 
-static int hws_set_audio_queue(struct hws_pcie_dev *hws, unsigned int ch)
+int hws_set_audio_queue(struct hws_pcie_dev *hws, unsigned int ch)
 {
     int ret = 0;
 
@@ -531,7 +531,7 @@ error:
 	return ret;
 }
 
-static void hws_audio_unregister(struct hws_pcie_dev *hws)
+void hws_audio_unregister(struct hws_pcie_dev *hws)
 {
     int i;
 

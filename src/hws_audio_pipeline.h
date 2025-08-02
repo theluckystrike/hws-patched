@@ -9,14 +9,13 @@
 /* PCM hardware capabilities (defined/initialized in hws_audio_pipeline.c) */
 extern struct snd_pcm_hardware audio_pcm_hardware;
 int hws_audio_register(struct hws_pcie_dev *dev);
+void hws_audio_unregister(struct hws_pcie_dev *hws);
 
 /* Audio capture pipeline APIs */
-int  StartAudioCapture(struct hws_pcie_dev *pdx, int index);
-void StopAudioCapture(struct hws_pcie_dev *pdx, int index);
-int  MemCopyAudioToSteam(struct hws_pcie_dev *pdx, int dwAudioCh);
+int  hws_start_audio_capture(struct hws_pcie_dev *pdx, unsigned int index);
+void hws_stop_audio_capture(struct hws_pcie_dev *pdx, unsigned int index);
+int  hws_copy_audio_to_stream(struct hws_pcie_dev *pdx, unsigned int ch);
 void audio_data_process(struct work_struct *p_work);
-void EnableAudioCapture(struct hws_pcie_dev *pdx, int index, int en);
-int CheckAudioCapture(struct hws_pcie_dev *pdx, int index);
-int SetAudioQueue(struct hws_pcie_dev *pdx, int dwAudioCh);
+int hws_set_audio_queue(struct hws_pcie_dev *pdx, unsigned int ch);
 
 #endif /* HWS_AUDIO_PIPELINE_H */
