@@ -83,7 +83,7 @@
 
 #define MAX_VIDEO_HW_W 1920
 #define MAX_VIDEO_HW_H 1080
-#define MAX_VIDEO_SCLAER_SIZE 1920*1080*2
+#define MAX_VIDEO_SCALER_SIZE 1920*1080*2
 
 struct hwsmem_param 
 {

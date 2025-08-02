@@ -267,7 +267,7 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
 #endif
 
 	hws_dev->video_wq = NULL;
-	hws_dev->audio_w = NULL;
+	hws_dev->audio_wq = NULL;
 
 	ret = hws_irq_setup(hws_dev, pci_dev);
 	if (ret) {
