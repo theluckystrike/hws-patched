@@ -293,8 +293,6 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
 		goto err_free_dma;
 	}
 
-	// in `hws_video_pipeline.c`
-	// FIXME: `EnableAudioCapture` sub method
 	hws_init_video_sys(hws_dev, 0);
 
     // NOTE: there are two loops, the `video_data_process` and this where we have periodic checks

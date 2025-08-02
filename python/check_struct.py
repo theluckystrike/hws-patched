@@ -36,7 +36,7 @@ struct hws_pcie_dev {
  	struct tasklet_struct dpc_video_tasklet[MAX_VID_CHANNELS];
  	unsigned long audio_data[MAX_VID_CHANNELS];
  	struct tasklet_struct dpc_audio_tasklet[MAX_VID_CHANNELS];
-	int irq_line;		/* flag if irq allocated successfully */	
+	// int irq_line;		/* flag if irq allocated successfully */	
 	// int msi_enabled;	/* flag if msi was enabled for the device */	
 	// int msix_enabled;	/* flag if msi-x was enabled for the device */	
 	// int irq_user_count;/* user interrupt count */     
@@ -64,7 +64,7 @@ struct hws_pcie_dev {
 	// VIDEO_INFO      	m_format[MAX_VID_CHANNELS];
 	
 	// ACAP_AUDIO_INFO     m_AudioInfo[MAX_VID_CHANNELS];
-	uint8_t				m_bChangeVideoSize[MAX_VID_CHANNELS];
+	// uint8_t				m_bChangeVideoSize[MAX_VID_CHANNELS];
 	
 	// struct task_struct *mMain_tsk; 
 	// int m_curr_No_Video[MAX_VID_CHANNELS];

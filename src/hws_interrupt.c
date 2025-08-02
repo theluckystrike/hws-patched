@@ -160,10 +160,10 @@ static void hws_dpc_video(unsigned long data)
         if (hws->video[ch].irq_done_flag && hws->video[ch].irq_event) {
                 hws->video[ch].irq_done_flag  = false;
 
-                if (!hws->m_bChangeVideoSize[ch]) {
+                if (!hws->video[ch].size_changed_flag) {
                         queue_work(hws->video_wq, &hws->video[ch].videowork);
                 } else {
-                        hws->m_bChangeVideoSize[ch] = 0;
+                        hws->video[ch].size_changed_flag = 0;
                 }
         }
 }

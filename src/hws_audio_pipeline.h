@@ -10,6 +10,9 @@
 extern struct snd_pcm_hardware audio_pcm_hardware;
 int hws_audio_register(struct hws_pcie_dev *dev);
 void hws_audio_unregister(struct hws_pcie_dev *hws);
+void hws_enable_audio_capture(struct hws_pcie_dev *hws,
+                                            unsigned int ch,
+                                            bool enable);
 
 /* Audio capture pipeline APIs */
 int  hws_start_audio_capture(struct hws_pcie_dev *pdx, unsigned int index);

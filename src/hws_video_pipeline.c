@@ -153,7 +153,7 @@ int StartVideoCapture(struct hws_pcie_dev *pdx, int index)
 	pdx->m_VideoInfo[index].m_nVideoIndex = 0;
 	//spin_unlock_irqrestore(&pdx->videoslock[index], flags);
 
-	pdx->m_bChangeVideoSize[index] = 0;
+	pdx->video[index].size_changed_flag = 0;
 	pdx->video[index].irq_done_flag = 1;
 	pdx->video[index].irq_event = 1;
 	pdx->video[index].dma_busy = 0;
@@ -164,15 +164,13 @@ int StartVideoCapture(struct hws_pcie_dev *pdx, int index)
 
 void StopVideoCapture(struct hws_pcie_dev *pdx, int index)
 {
-	//int inc=0;
-
 	if (pdx->video[index].cap_active == 0)
 		return;
-	//pdx->m_nVideoIndex[index] =0;
+
 	pdx->m_VideoInfo[index].dwisRuning = 0;
 	pdx->video[index].stop_requested = 1;
 	pdx->video[index].irq_event = 0;
-	pdx->m_bChangeVideoSize[index] = 0;
+	pdx->video[index].size_changed_flag = 0;
 	hws_enable_video_capture(pdx, index, false);
 	pdx->video[index].irq_done_flag = 0;
 }
@@ -224,7 +222,7 @@ void hws_init_video_sys(struct hws_pcie_dev *hws, bool enable)
 
             /* helpers to arm/disable capture engines */
             hws_enable_video_capture(hws, i, false);
-            EnableAudioCapture(hws, i, 0);
+            hws_enable_audio_capture(hws, i, 0);
         }
     }
 

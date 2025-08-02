@@ -270,7 +270,7 @@ void audio_data_process(struct work_struct *work)
 		_deliver_samples(chan, buf, len);
 }
 
-static inline void hws_enable_audio_capture(struct hws_pcie_dev *hws,
+void hws_enable_audio_capture(struct hws_pcie_dev *hws,
                                             unsigned int ch,
                                             bool enable)
 {
