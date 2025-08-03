@@ -332,6 +332,7 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
 		    ret = -ENOMEM;
 		    goto err_stop_thread;
 	}
+
 	hws_dev->audio_wq = create_singlethread_workqueue("hws-audio");
 	if (!hws_dev->audio_wq) {
 		    ret = -ENOMEM;

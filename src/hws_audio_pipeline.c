@@ -161,35 +161,6 @@ static int hws_copy_audio_to_stream(struct hws_pcie_dev *hws,
     return 0;
 }
 
-int hws_set_audio_queue(struct hws_pcie_dev *hws, unsigned int ch)
-{
-    int ret = 0;
-
-    dev_dbg(&hws->pdev->dev,
-            "set audio queue on channel %u\n", ch);
-
-    /* no DMA until capture has been enabled */
-    if (!hws->cap_active[ch])
-        return -ENODEV;
-
-    /* if stream is stopped, clear stop flag and exit */
-    if (!hws->stream_running[ch]) {
-        if (hws->stop_requested[ch]) {
-            hws->stop_requested[ch] = false;
-            dev_dbg(&hws->pdev->dev,
-                    "cleared stop flag on channel %u\n", ch);
-        }
-        hws->dma_busy[ch] = false;
-        return 0;
-    }
-
-    /* mark DMA busy while copying */
-    hws->dma_busy[ch] = true;
-    ret = hws_copy_audio_to_stream(hws, ch);
-    hws->dma_busy[ch] = false;
-
-    return ret;
-}
 
 
 static int _deliver_samples(struct hws_audio *drv, void *aud_data, u32 aud_len)

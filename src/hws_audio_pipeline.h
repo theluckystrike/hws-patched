@@ -19,6 +19,5 @@ int  hws_start_audio_capture(struct hws_pcie_dev *pdx, unsigned int index);
 void hws_stop_audio_capture(struct hws_pcie_dev *pdx, unsigned int index);
 int  hws_copy_audio_to_stream(struct hws_pcie_dev *pdx, unsigned int ch);
 void audio_data_process(struct work_struct *p_work);
-int hws_set_audio_queue(struct hws_pcie_dev *pdx, unsigned int ch);
 
 #endif /* HWS_AUDIO_PIPELINE_H */

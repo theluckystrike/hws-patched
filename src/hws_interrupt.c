@@ -1,4 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
+#include <linux/io.h>
+#include <linux/interrupt.h>
+
 #include "hws_interrupt.h"
 #include "hws_reg.h"
 #include "hws_video_pipeline.h"
@@ -16,13 +19,13 @@ static int hws_set_queue(struct hws_pcie_dev *hws, unsigned int ch)
     int ret = -ENODEV;
 
     /* Not yet started? */
-    if (!hws->running)
+    if (!hws->start_run)
         return -EINVAL;
 
     /* Channel not streaming?  Reset any stop flag and bail. */
-    if (!hws->vcap_started[ch]) {
-        if (hws->video_stop[ch]) {
-            hws->video_stop[ch] = false;
+    if (!hws->video[ch].cap_active) {
+        if (hws->video[ch].stop_requested) {
+            hws->video[ch].stop_requested = false;
             dev_dbg(&hws->pdev->dev,
                     "hws_set_queue[%u]: exit-stop cleared\n", ch);
         }
@@ -30,36 +33,34 @@ static int hws_set_queue(struct hws_pcie_dev *hws, unsigned int ch)
     }
 
     /* On older hardware, bump our software frame counter */
+    // FIXME
     if (hws->device_hw_version == 0)
         hws->sw_frame_rate[ch]++;
 
     /* Mark the channel busy while copying */
-    hws->video_busy[ch] = true;
+    hws->video[ch].dma_busy = true;
 
     /* Pull data from the device into the vb2 stream */
     ret = hws_memcopy_video_to_stream(hws, ch);
 
     /* Done copying */
-    hws->video_busy[ch] = false;
+    hws->video[ch].dma_busy  = false;
 
     return ret;
 }
 
-//-----------------------------
-/* Interrupt handler. Read/modify/write the command register to disable
- * the interrupt. */
-//static irqreturn_t irqhandler(int irq, struct uio_info *info)
+
 irqreturn_t irqhandler(int irq, void *info)
 {
     struct hws_pcie_dev *pdx = info;
-    u32 sys_status = READ_REGISTER_ULONG(pdx, HWS_REG_SYS_STATUS);
+    u32 sys_status = readl(pdx->bar0_base + HWS_REG_SYS_STATUS);
 
     /* No DMA busy or card gone: exit early */
     if ((sys_status & HWS_SYS_DMA_BUSY_BIT) == 0 || sys_status == 0xFFFFFFFF)
         return IRQ_NONE;
 
     /* Read interrupt status bits */
-    u32 int_state = READ_REGISTER_ULONG(pdx, HWS_REG_INT_STATUS);
+    u32 int_state = readl(pdx->bar0_base + HWS_REG_INT_STATUS);
     if (!int_state)
         return IRQ_NONE;  /* spurious interrupt */
 
@@ -77,14 +78,14 @@ irqreturn_t irqhandler(int irq, void *info)
             pdx->video[ch].irq_done_flag = 1;
             ack_mask |= vbit;
 
-            if (pdx->video[ch].dma_busy == 0) {
+            if (!pdx->video[ch].dma_busy) {
                 /* Read which half of the ring the DMA is writing to */
-                u32 toggle = READ_REGISTER_ULONG(pdx, HWS_REG_VBUF_TOGGLE(ch)) & 0x01;
+                u32 toggle = readl(pdx->bar0_base + HWS_REG_VBUF_TOGGLE(ch)) & 0x01;
 
                 if (pdx->video_data[ch] != toggle) {
                     pdx->video_data[ch]        = toggle;
                     pdx->audio[ch].wr_idx = toggle;
-                    tasklet_schedule(&pdx->dpc_video_tasklet[ch]);
+                    tasklet_schedule(&pdx->video[ch].video_bottom_half);
                 } else {
                     pdx->video[ch].half_done_cnt = 0;
                 }
@@ -99,40 +100,57 @@ irqreturn_t irqhandler(int irq, void *info)
 
             ack_mask |= abit;
 
-            if (pdx->audio[ch].dma_busy == 0) {
+            if (!pdx->audio[ch].dma_busy) {
                 /* Read which half of the audio ring is active */
-                u32 toggle = READ_REGISTER_ULONG(pdx, HWS_REG_ABUF_TOGGLE(ch)) & 0x01;
+                u32 toggle = readl(pdx->bar0_base + HWS_REG_ABUF_TOGGLE(ch)) & 0x01;
 
                 pdx->audio[ch].wr_idx = toggle;
                 pdx->audio_data[ch]         = toggle;
-                tasklet_schedule(&pdx->dpc_audio_tasklet[ch]);
+                tasklet_schedule(&pdx->audio[ch].audio_bottom_half);
             }
         }
 
         /* Acknowledge (clear) all bits we just handled */
-        WRITE_REGISTER_ULONG(pdx, HWS_REG_INT_ACK, ack_mask);
+	writel(ack_mask, pdx->bar0_base + HWS_REG_INT_ACK);
 
         /* Immediately clear ack_mask to avoid re-acknowledging stale bits */
         ack_mask = 0;
 
         /* Re‐read in case new interrupt bits popped while processing */
-        int_state = READ_REGISTER_ULONG(pdx, HWS_REG_INT_STATUS);
+	int_state = readl(pdx->bar0_base + HWS_REG_INT_STATUS);
     }
 
     return IRQ_HANDLED;
 }
 
-
-void hws_free_irqs(struct hws_pcie_dev *lro)
+int hws_set_audio_queue(struct hws_pcie_dev *hws, unsigned int ch)
 {
-	//int i;
+    int ret = 0;
 
-	//BUG_ON(!lro);
+    dev_dbg(&hws->pdev->dev,
+            "set audio queue on channel %u\n", ch);
 
-	if (lro->irq_line != -1) {
-		//printk("Releasing IRQ#%d\n", lro->irq_line);
-		free_irq(lro->irq_line, lro);
-	}
+    /* no DMA until capture has been enabled */
+    if (!hws->cap_active[ch])
+        return -ENODEV;
+
+    /* if stream is stopped, clear stop flag and exit */
+    if (!hws->stream_running[ch]) {
+        if (hws->stop_requested[ch]) {
+            hws->stop_requested[ch] = false;
+            dev_dbg(&hws->pdev->dev,
+                    "cleared stop flag on channel %u\n", ch);
+        }
+        hws->dma_busy[ch] = false;
+        return 0;
+    }
+
+    /* mark DMA busy while copying */
+    hws->dma_busy[ch] = true;
+    ret = hws_copy_audio_to_stream(hws, ch);
+    hws->dma_busy[ch] = false;
+
+    return ret;
 }
 
 void hws_dpc_audio(unsigned long data)
@@ -143,6 +161,7 @@ void hws_dpc_audio(unsigned long data)
         unpack_dev_ch(data, &hws, &ch);
         hws_set_audio_queue(hws, ch);          /* unchanged business logic */
 }
+
 
 static void hws_dpc_video(unsigned long data)
 {
