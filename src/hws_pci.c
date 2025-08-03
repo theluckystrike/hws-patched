@@ -215,7 +215,7 @@ static void hws_adapters_init(struct hws_pcie_dev *dev)
 	int width, height;
 	for (index = 0; index < MAX_VID_CHANNELS; index++) {
 		width = dev->video[index].queue_status[0].width;
-		height = dev->video[index].queue_status->height;
+		height = dev->video[index].queue_status[0].height;
 
 		dev->video[index].output_pixel_format = 0;
 		dev->video[index].output_size_index = 0;
@@ -226,6 +226,18 @@ static void hws_adapters_init(struct hws_pcie_dev *dev)
 	}
 }
 
+/*
+ * alloc_dev → 
+ * enable_device → 
+ * request_regions → 
+ * ioremap → 
+ * MSI scan / IRQ setup → 
+ * chip-id + channel init → 
+ * DMA alloc → 
+ * helper kthread → 
+ * work-queues → 
+ * V4L2 / ALSA registration
+ */
 static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id)
 {
 	struct hws_pcie_dev *hws_dev;
@@ -238,6 +250,7 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
 		dev_err(&pci_dev->dev, "%s: out of memory\n", __func__);
 		return -ENOMEM;
 	}
+	hws_dev->bar0_base = NULL;
 
 	hws_dev->pdev = pci_dev;
 
@@ -246,6 +259,7 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
 	dev_info(&pci_dev->dev, "Device VID=0x%04x, DID=0x%04x\n",
 		 pci_dev->vendor, pci_dev->device);
 
+	// chatgpt recommends pci_enable_device_mem?
 	ret = pci_enable_device(pci_dev);
 	if (ret) {
 		dev_err(&pci_dev->dev, "%s: pci_enable_device failed: %d\n",
@@ -258,6 +272,8 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
         dev_err(&pci_dev->dev, "pci_request_regions failed: %d\n", ret);
         goto err_disable_device;
     }
+
+    pci_set_drvdata(pci_dev, hws_dev);
 
     /* map BAR0 via the PCI core: */
     hws_dev->bar0_base = pci_iomap(pci_dev, 0,
@@ -272,14 +288,6 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
 	enable_pcie_relaxed_ordering(pci_dev);
 	pci_set_master(pci_dev);
 
-	ret = probe_scan_for_msi(hws_dev, pci_dev);
-
-	if (ret < 0) {
-        dev_err(&pci_dev->dev, "%s: MSI setup failed: %d\n",
-                __func__, ret);
-		goto err_disable_msi;
-	}
-
 #ifdef CONFIG_ARCH_TI816X
 	pcie_set_readrq(pci_dev, 128);
 #endif
@@ -287,14 +295,6 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
 	hws_dev->video_wq = NULL;
 	hws_dev->audio_wq = NULL;
 
-	ret = hws_irq_setup(hws_dev);
-	if (ret) {
-        dev_err(&pci_dev->dev, "%s: IRQ setup failed: %d\n",
-                __func__, ret);
-		goto err_disable_msi;
-	}
-
-	pci_set_drvdata(pci_dev, hws_dev);
 	read_chip_id(hws_dev);
     /* Initialize each video/audio channel */
     for (i = 0; i < hws_dev->max_channels; i++) {
@@ -338,9 +338,27 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
 		    goto err_destroy_wq;
 	}
 
+	ret = probe_scan_for_msi(hws_dev, pci_dev);
+
+	if (ret < 0) {
+        dev_err(&pci_dev->dev, "%s: MSI setup failed: %d\n",
+                __func__, ret);
+		goto err_destroy_wq;
+	}
+
+
+	// FIXME: Clear/ack any pending bits in the device before requesting irq and enabling MSI
+	ret = hws_irq_setup(hws_dev);
+	if (ret) {
+        dev_err(&pci_dev->dev, "%s: IRQ setup failed: %d\n",
+                __func__, ret);
+		goto err_free_irq;
+	}
+
+
 	// FIXME: figure out if this hardware only supports 4 GB RAM
 	if (hws_video_register(hws_dev))
-		goto err_destroy_wq;
+		goto err_free_irq;
 
     // FIXME: `audio_data_process` which gets set/called from this func sucks
 	if (hws_audio_register(hws_dev))
@@ -349,9 +367,15 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
 
 err_unregister_video:
 	hws_video_unregister(hws_dev);
+err_free_irq:
+    hws_disable_msi(hws_dev);
+    /* devm_free_irq() is implicit */
 err_destroy_wq:
+	if (hws_dev->video_wq)
         destroy_workqueue(hws_dev->video_wq);
-        destroy_workqueue(hws_dev->audio_wq);
+	if (hws_dev->audio_wq)
+		destroy_workqueue(hws_dev->audio_wq);
+	hws_disable_msi(hws_dev);
 err_stop_thread:
         if (!IS_ERR_OR_NULL(hws_dev->main_task))
                 kthread_stop(hws_dev->main_task);
@@ -363,10 +387,11 @@ err_cleanup_channels:
         hws_video_cleanup_channel(hws_dev, j);
 	hws_audio_cleanup_channel(hws_dev, j);
     }
-err_disable_msi:
-    hws_disable_msi(hws_dev);
 err_unmap_bar:
-        pci_iounmap(pci_dev, hws_dev->bar0_base);
+        if (hws_dev->bar0_base) {          /* mapped → unmap & NULL it     */
+                pci_iounmap(pci_dev, hws_dev->bar0_base);
+                hws_dev->bar0_base = NULL;
+        }
 err_release_regions:
         pci_release_regions(pci_dev);
 err_disable_device:
