@@ -12,7 +12,7 @@
  */
 void hws_free_irqs(struct hws_pcie_dev *dev);
 irqreturn_t irqhandler(int irq, void *info);
-void hws_dpc_audio(unsigned long data)
+void hws_dpc_audio(unsigned long data);
 
 void DpcForIsr_Audio0(unsigned long data);
 void DpcForIsr_Audio1(unsigned long data);

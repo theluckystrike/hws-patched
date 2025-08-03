@@ -463,7 +463,6 @@ static void hws_remove(struct pci_dev *pdev)
 	/* disable interrupts */
 	hws_free_irqs(hdev);
 
-
 	for (i = 0; i < MAX_VID_CHANNELS; i++) {
 		tasklet_kill(&hdev->video[i].video_bottom_half);
 		tasklet_kill(&hdev->audio[i].audio_bottom_half);
@@ -475,10 +474,12 @@ static void hws_remove(struct pci_dev *pdev)
 			hdev->audio[i].sound_card = NULL;
 		}
 	}
+
 	for (i = 0; i < hdev->cur_max_video_ch; i++) {
 		vdev = &hdev->video[i].video_device;
 		video_unregister_device(vdev);
-		v4l2_device_unregister(&hdev->video[i].video_device);
+		// FIXME: need to understand if we're cleaning this up correctly
+		// v4l2_device_unregister(&hdev->video[i].video_device);
 		v4l2_ctrl_handler_free(&hdev->video[i].control_handler);
 	}
     /* flush & destroy workqueues */
@@ -487,6 +488,7 @@ static void hws_remove(struct pci_dev *pdev)
         destroy_workqueue(hdev->video_wq);
         hdev->video_wq = NULL;
     }
+
     if (hdev->audio_wq) {
         flush_workqueue(hdev->audio_wq);
         destroy_workqueue(hdev->audio_wq);
@@ -737,7 +739,7 @@ static void hws_audio_cleanup_channel(struct hws_pcie_dev *pdev, int ch)
     /* ── free DMA buffer if allocated ──────────────────────────── */
     if (aud->data_buf) {
         /* if you used pci_alloc_consistent / dma_alloc_coherent: */
-        dma_free_coherent(pdev->pdev,
+        dma_free_coherent(&pdev->pdev->dev,
                           aud->buf_size_bytes,
                           aud->data_buf,
                           aud->buf_phys_addr);
