@@ -1,19 +1,25 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include <linux/pci.h>
 #include <linux/types.h>
+#include <linux/iopoll.h>
 
 #include <media/v4l2-ctrls.h>
 
 #include "hws.h"
+#include "hws_reg.h"
 #include "hws_dma.h"
 #include "hws_video_pipeline.h"
 #include "hws_audio_pipeline.h"
 #include "hws_interrupt.h"
 #include "hws_video.h"
+#include "hws_v4l2_ioctl.h"
 
 #define DRV_NAME "HWS driver"
 #define HWS_REG_DEVICE_INFO   0x0000
 #define HWS_REG_DEC_MODE      0x0004
+#define HWS_BUSY_POLL_DELAY_US   10
+#define HWS_BUSY_POLL_TIMEOUT_US 1000000
+
 
 /* register layout inside HWS_REG_DEVICE_INFO */
 #define DEVINFO_VER          GENMASK( 7,  0)
@@ -258,7 +264,7 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
                                 pci_resource_len(pci_dev, 0));
     if (!hws_dev->bar0_base) {
         dev_err(&pci_dev->dev, "pci_iomap failed\n");
-        err = -ENOMEM;
+        ret = -ENOMEM;
         goto err_release_regions;
     }
 
@@ -329,7 +335,7 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
 	hws_dev->audio_wq = create_singlethread_workqueue("hws-audio");
 	if (!hws_dev->audio_wq) {
 		    ret = -ENOMEM;
-		    goto err_destroy_video_wq;
+		    goto err_destroy_wq;
 	}
 
 	// FIXME: figure out if this hardware only supports 4 GB RAM
@@ -371,7 +377,7 @@ err_free_dev:
 
 static int hws_check_busy(struct hws_pcie_dev *pdx)
 {
-    void __iomem *reg = pdx->mmio_base + HWS_REG_SYS_STATUS;
+    void __iomem *reg = pdx->bar0_base + HWS_REG_SYS_STATUS;
     u32 val;
     int ret;
 
@@ -394,7 +400,7 @@ static void hws_stop_dsp(struct hws_pcie_dev *hws)
     u32 status;
 
     /* Read the decoder mode/status register */
-    status = readl(hws->regs + HWS_REG_DEC_MODE);
+    status = readl(hws->bar0_base + HWS_REG_DEC_MODE);
     dev_dbg(&hws->pdev->dev, "hws_stop_dsp: status=0x%08x\n", status);
 
     /* If the device looks unplugged/stuck, bail out */
@@ -402,13 +408,13 @@ static void hws_stop_dsp(struct hws_pcie_dev *hws)
         return;
 
     /* Tell the DSP to stop */
-    writel(0x10, hws->regs + HWS_REG_DEC_MODE);
+    writel(0x10, hws->bar0_base + HWS_REG_DEC_MODE);
 
     /* FIXME: hws_check_busy() should return an error if it times out */
     hws_check_busy(hws);
 
     /* Disable video capture engine in the DSP */
-    writel(0x0, hws->regs + HWS_REG_VCAP_ENABLE);
+    writel(0x0, hws->bar0_base + HWS_REG_VCAP_ENABLE);
 }
 
 static void hws_stop_device(struct hws_pcie_dev *hws)
@@ -420,93 +426,82 @@ static void hws_stop_device(struct hws_pcie_dev *hws)
     hws_stop_dsp(hws);
 
     /* 2) Check for a lost PCI device */
-    status = readl(hws->regs + HWS_REG_STATUS);
+    status = readl(hws->bar0_base + HWS_REG_SYS_STATUS);
     dev_dbg(&hws->pdev->dev, "hws_stop_device: status=0x%08x\n", status);
     if (status == 0xFFFFFFFF) {
-        hws->pci_dev_lost = true;
+        hws->pci_lost = true;
     } else {
         /* 3) Tear down each video/audio channel */
-        for (i = 0; i < hws->num_video_ch; ++i) {
+        for (i = 0; i < hws->max_channels; ++i) {
             hws_enable_video_capture(hws, i, false);
             hws_enable_audio_capture(hws, i, false);
         }
     }
 
     /* 4) Mark the device as no longer running */
-    hws->running = false;
+    hws->start_run = false;
 
     /* 5) Free any DMA pools / buffer pools you allocated */
-    hws_dma_free_pool(hws);
+    hws_dma_mem_free(hws);
 
     dev_dbg(&hws->pdev->dev, "hws_stop_device: complete\n");
 }
 
 static void hws_remove(struct pci_dev *pdev)
 {
-	int i;
-	struct video_device *vdev;
-	struct hws_pcie_dev *dev = (struct hws_pcie_dev *)pci_get_drvdata(pdev);
-	//----------------------------
-	if (!dev->bar0_base)
-		return;
-	hws_stop_device(dev);
+    struct hws_pcie_dev *hdev = pci_get_drvdata(pdev);
+    struct video_device *vdev;
+    int i;
+    if (!hdev || !hdev->bar0_base)
+        return;
+
+	if (hdev->main_task) {
+		kthread_stop(hdev->main_task);
+	}
+
+	hws_stop_device(hdev);
 	/* disable interrupts */
-	hws_free_irqs(dev);
+	hws_free_irqs(hdev);
 
-	if (pdx->main_task) {
-		kthread_stop(pdx->main_task);
-	}
 
-	//printk("hws_remove  0\n");
 	for (i = 0; i < MAX_VID_CHANNELS; i++) {
-		tasklet_kill(&dev->dpc_video_tasklet[i]);
-		tasklet_kill(&dev->dpc_audio_tasklet[i]);
+		tasklet_kill(&hdev->video[i].video_bottom_half);
+		tasklet_kill(&hdev->audio[i].audio_bottom_half);
 	}
-	//-------------------------
-	//printk("hws_remove  1\n");
-	for (i = 0; i < dev->cur_max_video_ch; i++) {
-		if (dev->audio[i].resampled_buffer) {
-			vfree(dev->audio[i].resampled_buffer);
-			dev->audio[i].resampled_buffer = NULL;
-		}
-		if (dev->audio[i].sound_card) {
-			snd_card_free(dev->audio[i].sound_card);
-			dev->audio[i].sound_card = NULL;
+
+	for (i = 0; i < hdev->cur_max_video_ch; i++) {
+		if (hdev->audio[i].sound_card) {
+			snd_card_free(hdev->audio[i].sound_card);
+			hdev->audio[i].sound_card = NULL;
 		}
 	}
-	for (i = 0; i < dev->cur_max_video_ch; i++) {
-		vdev = &dev->video[i].vdev;
+	for (i = 0; i < hdev->cur_max_video_ch; i++) {
+		vdev = &hdev->video[i].video_device;
 		video_unregister_device(vdev);
-		v4l2_device_unregister(&dev->video[i].v4l2_dev);
-		v4l2_ctrl_handler_free(&dev->video[i].control_handler);
+		v4l2_device_unregister(&hdev->video[i].video_device);
+		v4l2_ctrl_handler_free(&hdev->video[i].control_handler);
 	}
-	//-----------------
-	if (dev->video_wq) {
-		destroy_workqueue(dev->video_wq);
-	}
+    /* flush & destroy workqueues */
+    if (hdev->video_wq) {
+        flush_workqueue(hdev->video_wq);
+        destroy_workqueue(hdev->video_wq);
+        hdev->video_wq = NULL;
+    }
+    if (hdev->audio_wq) {
+        flush_workqueue(hdev->audio_wq);
+        destroy_workqueue(hdev->audio_wq);
+        hdev->audio_wq = NULL;
+    }
 
-	if (dev->audio_wq) {
-		destroy_workqueue(dev->audio_wq);
-	}
-	dev->video_wq = NULL;
-	dev->audio_wq = NULL;
-	//free_irq(dev->pdev->irq, dev);
-
-	iounmap(dev->info.mem[0].internal_addr);
-
-	//pci_disable_device(pdev);
-	if (dev->msix_enabled) {
+	if (hdev->msix_enabled) {
 		pci_disable_msix(pdev);
-		dev->msix_enabled = 0;
-	} else if (dev->msi_enabled) {
+		hdev->msix_enabled = 0;
+	} else if (hdev->msi_enabled) {
 		pci_disable_msi(pdev);
-		dev->msi_enabled = 0;
+		hdev->msi_enabled = 0;
 	}
-	// FIXME: is this no longer needed because we're using device managed memory?
-	kfree(dev);
 	pci_disable_device(pdev);
 	pci_set_drvdata(pdev, NULL);
-	//printk("hws_remove  Done\n");
 }
 
 /* ─────────────────────────────────────────────────────────── */
@@ -593,7 +588,7 @@ static int hws_video_init_channel(struct hws_pcie_dev *pdev, int ch)
 
 	vid->signal_loss_cnt  = 0;
 	vid->sw_fps           = 0;
-	vid->sequence_number  = 0;
+	atomic_set(&vid->sequence_number, 0);
 
 	/* ── V4L2 control handler (optional but mirrors old code) ───── */
 	v4l2_ctrl_handler_init(hdl, 1);
@@ -700,9 +695,6 @@ static int hws_audio_init_channel(struct hws_pcie_dev *pdev, int ch)
 	aud->rd_idx          = 0;
 	aud->irq_event       = 0;
 
-	/* ── resampling workspace cleared ──────────────────────────── */
-	aud->resampled_buffer      = NULL;
-	aud->resampled_buffer_size = 0;
 
 	/* ── ALSA card skeleton (optional for minimal build) ───────── */
 	err = snd_card_new(&pdev->pdev->dev, -1, NULL,
@@ -720,7 +712,7 @@ static int hws_audio_init_channel(struct hws_pcie_dev *pdev, int ch)
 	spin_lock_init(&pdev->audiolock[ch]);
 
 	/* ── per-channel tasklet for ISR bottom-half ──────────────── */
-        tasklet_init(&pdev->dpc_audio_tasklet[ch],
+        tasklet_init(&aud->audio_bottom_half,
                      hws_dpc_audio,
                      pack_dev_ch(pdev, ch));
 
@@ -734,7 +726,7 @@ static void hws_audio_cleanup_channel(struct hws_pcie_dev *pdev, int ch)
     int q;
 
     /* ── kill the tasklet (bottom-half) ───────────────────────── */
-    tasklet_kill(&pdev->dpc_audio_tasklet[ch]);
+    tasklet_kill(&pdev->audio[ch].audio_bottom_half);
 
     /* ── unregister & free the ALSA card ───────────────────────── */
     if (aud->sound_card) {
@@ -745,19 +737,14 @@ static void hws_audio_cleanup_channel(struct hws_pcie_dev *pdev, int ch)
     /* ── free DMA buffer if allocated ──────────────────────────── */
     if (aud->data_buf) {
         /* if you used pci_alloc_consistent / dma_alloc_coherent: */
-        pci_free_consistent(pdev->pdev,
-                            aud->buf_size_bytes,
-                            aud->data_buf,
-                            aud->buf_phys_addr);
+        dma_free_coherent(pdev->pdev,
+                          aud->buf_size_bytes,
+                          aud->data_buf,
+                          aud->buf_phys_addr);
         aud->data_buf = NULL;
         aud->buf_phys_addr = 0;
         aud->buf_size_bytes = 0;
     }
-
-    /* ── free resampling workspace ─────────────────────────────── */
-    kfree(aud->resampled_buffer);
-    aud->resampled_buffer = NULL;
-    aud->resampled_buffer_size = 0;
 
     /* ── clear per-queue info ──────────────────────────────────── */
     for (q = 0; q < MAX_AUDIO_QUEUE; q++) {

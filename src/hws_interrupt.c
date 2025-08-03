@@ -136,7 +136,7 @@ void hws_free_irqs(struct hws_pcie_dev *lro)
 	}
 }
 
-static void hws_dpc_audio(unsigned long data)
+void hws_dpc_audio(unsigned long data)
 {
         struct hws_pcie_dev *hws;
         u32                  ch;

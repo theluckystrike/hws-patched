@@ -273,6 +273,7 @@ struct hws_video {
 
 	/* ───── async helpers ───── */
 	struct work_struct		 video_work;
+	struct tasklet_struct  video_bottom_half;
 
 	/* ───── misc flags ───── */
 	bool					 interlaced;
@@ -338,8 +339,6 @@ struct hws_video {
 | `ring_size_byframes`   | `ring_size_frames`              | hws\_audio                      |
 | `period_size_byframes` | `period_size_frames`            | hws\_audio                      |
 | `period_used_byframes` | `period_used_frames`            | hws\_audio                      |
-| `resampled_buf`        | `resampled_buffer`              | hws\_audio                      |
-| `resampled_buf_size`   | `resampled_buffer_size`         | hws\_audio                      |
 | `sample_rate_out`      | `output_sample_rate`            | hws\_audio                      |
 | `channels`             | `channel_count`                 | hws\_audio                      |
 | `bits_per_sample`      | `bits_per_sample` *(unchanged)* | hws\_audio                      |
@@ -370,6 +369,7 @@ struct hws_audio {
 
 	/* ───── async helper ───── */
 	struct work_struct		 audio_work;
+	struct tasklet_struct  audio_bottom_half;
 
 	/* ───── indexing & position ───── */
 	int						 channel_index;		/* 0 … MAX_VID_CHANNELS-1 */
@@ -402,10 +402,6 @@ struct hws_audio {
 	u32						 ring_size_frames;		/* total size (frames)  */
 	u32						 period_size_frames;	/* ALSA period size     */
 	u32						 period_used_frames;	/* frames consumed      */
-
-	/* ───── resampling workspace ───── */
-	void					 *resampled_buffer;
-	u32						 resampled_buffer_size;
 
 	/* ───── PCM format ───── */
 	u32						 output_sample_rate;	/* Hz                   */
