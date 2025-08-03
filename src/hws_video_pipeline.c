@@ -141,6 +141,7 @@ int StartVideoCapture(struct hws_pcie_dev *pdx, int index)
 	//--------------------
 	check_card_status(pdx);
 	//--------------------
+	// FIXME: check if I need to set `stop_requested` in the video[index] to 0
 	//spin_lock_irqsave(&pdx->videoslock[index], flags);
 	for (j = 0; j < MAX_VIDEO_QUEUE; j++) {
 		pdx->m_pVCAPStatus[index][j].byLock = MEM_UNLOCK;
@@ -155,7 +156,8 @@ int StartVideoCapture(struct hws_pcie_dev *pdx, int index)
 	pdx->video[index].size_changed_flag = 0;
 	pdx->video[index].irq_done_flag = 1;
 	pdx->video[index].irq_event = 1;
-	pdx->video[index].dma_busy = 0;
+	atomic_set(&hws->audio[ch].dma_busy, 0);
+
 	pdx->video_data[index] = 0;
 	hws_enable_video_capture(pdx, index, true);
 	return 0;
@@ -167,7 +169,7 @@ void StopVideoCapture(struct hws_pcie_dev *pdx, int index)
 		return;
 
 	pdx->m_VideoInfo[index].dwisRuning = 0;
-	pdx->video[index].stop_requested = 1;
+	atomic_set(&pdx->video[index].stop_requested, 1);
 	pdx->video[index].irq_event = 0;
 	pdx->video[index].size_changed_flag = 0;
 	hws_enable_video_capture(pdx, index, false);

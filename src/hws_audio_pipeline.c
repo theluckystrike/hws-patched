@@ -49,7 +49,7 @@ int hws_start_audio_capture(struct hws_pcie_dev *hws, unsigned int index)
 
     /* Mark stream running and clear stop flag */
     hws->stream_running[ch] = true;
-    hws->stop_requested[ch] = false;
+    atomic_set(&hws->audio[ch].stop_requested, 0);
 
     /* Reset ring pointers and data pointer */
 
@@ -81,7 +81,7 @@ static void hws_stop_audio_capture(struct hws_pcie_dev *hws,
 
     /* mark stream stopped */
     hws->stream_running[ch] = false;
-    hws->stop_requested[ch] = true;
+    atomic_set(&hws->audio[ch].stop_requested, 1);
 
     /* reset write pointer for a fresh restart */
     hws->audio[ch].wr_idx = 0;

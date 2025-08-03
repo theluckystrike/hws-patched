@@ -487,7 +487,7 @@ static void hws_remove(struct pci_dev *pdev)
 
 	hws_stop_device(hdev);
 	/* disable interrupts */
-	hws_free_irqs(hdev);
+	// hws_free_irqs(hdev);
 
 	for (i = 0; i < MAX_VID_CHANNELS; i++) {
 		tasklet_kill(&hdev->video[i].video_bottom_half);
@@ -606,8 +606,9 @@ static int hws_video_init_channel(struct hws_pcie_dev *pdev, int ch)
 
 	/* ── per-channel runtime flags / counters ───────────────────── */
 	vid->cap_active       = false;
-	vid->dma_busy         = 0;
-	vid->stop_requested   = false;
+	atomic_set(&vid->dma_busy, 0);
+
+	atomic_set(&vid->stop_requested, 0);
 	vid->rd_idx           = 0;
 	vid->wr_idx           = 0;
 	vid->half_done_cnt    = 0;
@@ -716,9 +717,10 @@ static int hws_audio_init_channel(struct hws_pcie_dev *pdev, int ch)
 
 	/* ── capture-state flags ───────────────────────────────────── */
 	aud->cap_active      = false;
-	aud->dma_busy        = 0;
+	atomic_set(&aud->dma_busy, 0);
+
 	aud->stream_running  = false;
-	aud->stop_requested  = false;
+	atomic_set(&aud->stop_requested, 0);
 	aud->wr_idx          = 0;
 	aud->rd_idx          = 0;
 	aud->irq_event       = 0;

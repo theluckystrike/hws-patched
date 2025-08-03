@@ -310,8 +310,8 @@ struct hws_video {
 
 	/* ───── per-channel capture state ───── */
 	bool					 cap_active;		/* was vcap_started      */
-	u8						 dma_busy;			/* was video_busy        */
-	bool					 stop_requested;	/* was video_stop        */
+	atomic_t                                 dma_busy;			/* was video_busy        */
+	atomic_t				 stop_requested;	/* was video_stop        */
 	int						 rd_idx;			/* read pointer          */
 	int						 wr_idx;			/* write pointer         */
 	int						 half_done_cnt;		/* half-buffer IRQ count */
@@ -387,12 +387,12 @@ struct hws_audio {
 
 	/* ───── per-channel capture state ───── */
 	bool					 cap_active;		/* was acap_started      */
-	u8						 dma_busy;			/* was audio_busy        */
+	atomic_t					dma_busy;			/* was audio_busy        */
 	u8						 wr_idx;			/* write index           */
 	int						 rd_idx;			/* read  index           */
 	u8						 irq_event;			/* last IRQ event code   */
 	bool					 stream_running;	/* was audio_running     */
-	bool					 stop_requested;	/* was audio_stop        */
+	atomic_t				stop_requested;	/* was audio_stop        */
 
 	/* ───── ring-buffer layout ───── */
 	int						 ring_offset_bytes;		/* DMA start offset     */
