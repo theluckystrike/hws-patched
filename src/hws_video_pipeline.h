@@ -19,7 +19,7 @@ void StopVideoCapture(struct hws_pcie_dev *pdx, int index);
 
 void check_video_format(struct hws_pcie_dev *pdx);
 int Get_Video_Status(struct hws_pcie_dev *pdx, unsigned int ch);
-int MemCopyVideoToSteam(struct hws_pcie_dev *pdx, int nDecoder);
+int hws_memcopy_video_to_stream(struct hws_pcie_dev *pdx, int nDecoder);
 void video_data_process(struct work_struct *p_work);
 
 #endif /* HWS_VIDEO_PIPELINE_H */

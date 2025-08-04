@@ -34,9 +34,10 @@ static int hws_set_queue(struct hws_pcie_dev *hws, unsigned int ch)
     }
 
     /* On older hardware, bump our software frame counter */
-    // FIXME
-    if (hws->device_hw_version == 0)
-        hws->sw_frame_rate[ch]++;
+    // FIXME: check if this doesn't need to be `device_ver` via m_DeviceHW_Version instead of hw_ver via m_DeviceHW_Version
+    if (hws->hw_ver== 0)
+	    // FIXME: `m_dwSWFrameRate`
+        hws->video[ch].sw_fps++;
 
     /* Mark the channel busy while copying */
     atomic_set(&hws->audio[ch].dma_busy, 1);
@@ -132,11 +133,11 @@ int hws_set_audio_queue(struct hws_pcie_dev *hws, unsigned int ch)
             "set audio queue on channel %u\n", ch);
 
     /* no DMA until capture has been enabled */
-    if (!hws->cap_active[ch])
+    if (!hws->audio[ch].cap_active)
         return -ENODEV;
 
     /* if stream is stopped, clear stop flag and exit */
-    if (!hws->stream_running[ch]) {
+    if (!hws->audio[ch].stream_running) {
         if (atomic_read(&hws->audio[ch].stop_requested)) {
 	    atomic_set(&hws->audio[ch].stop_requested, 0);
             dev_dbg(&hws->pdev->dev,
@@ -152,6 +153,13 @@ int hws_set_audio_queue(struct hws_pcie_dev *hws, unsigned int ch)
     atomic_set(&hws->audio[ch].dma_busy, 0);
 
     return ret;
+}
+
+static inline void unpack_dev_ch(unsigned long data,
+                                 struct hws_pcie_dev **dev, u32 *ch)
+{
+        *ch  = data & CH_MASK;
+        *dev = (struct hws_pcie_dev *)(data & ~CH_MASK);
 }
 
 void hws_dpc_audio(unsigned long data)
@@ -180,7 +188,7 @@ static void hws_dpc_video(unsigned long data)
                 hws->video[ch].irq_done_flag  = false;
 
                 if (!hws->video[ch].size_changed_flag) {
-                        queue_work(hws->video_wq, &hws->video[ch].videowork);
+                        queue_work(hws->video_wq, &hws->video[ch].video_work);
                 } else {
                         hws->video[ch].size_changed_flag = 0;
                 }

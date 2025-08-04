@@ -49,14 +49,6 @@ static inline unsigned long pack_dev_ch(struct hws_pcie_dev *dev, u32 ch)
         return (unsigned long)dev | ch;          /* dev is pointer-aligned   */
 }
 
-static inline void unpack_dev_ch(unsigned long data,
-                                 struct hws_pcie_dev **dev, u32 *ch)
-{
-        *ch  = data & CH_MASK;
-        *dev = (struct hws_pcie_dev *)(data & ~CH_MASK);
-}
-
-
 static const struct pci_device_id hws_pci_table[] = {
 	MAKE_ENTRY(0x8888, 0x9534, 0x8888, 0x0007, NULL),
 	MAKE_ENTRY(0x1F33, 0x8534, 0x8888, 0x0007, NULL),

@@ -512,7 +512,7 @@ static void copy_and_update(struct hws_pcie_dev *pdx, int dec,
 }
 
 
-int MemCopyVideoToStream(struct hws_pcie_dev *pdx, int dec)
+int hws_memcopy_video_to_stream(struct hws_pcie_dev *pdx, int dec)
 {
     /* 0. fast validation ─────────────────────────────────────────── */
     if (!frame_dims_ok(pdx, dec))
