@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
+#include <linux/compiler.h>
 #include <linux/io.h>
 #include <linux/interrupt.h>
 
@@ -6,6 +7,9 @@
 #include "hws_reg.h"
 #include "hws_video_pipeline.h"
 #include "hws_audio_pipeline.h"
+
+
+#define MAX_INT_LOOPS 100
 
 /**
  * hws_set_queue() - Fetch next video buffer and push it downstream
@@ -69,7 +73,7 @@ irqreturn_t irqhandler(int irq, void *info)
     u32 ack_mask = 0;
 
     /* Loop until all pending bits are serviced (max 100 iterations) */
-    for (u32 cnt = 0; int_state && cnt < 100; ++cnt) {
+    for (u32 cnt = 0; int_state && cnt < MAX_INT_LOOPS; ++cnt) {
         /* ── Video channels 0–3 ───────────────────────────────────────── */
         for (int ch = 0; ch < 4; ++ch) {
             u32 vbit = HWS_INT_VDONE_BIT(ch);
@@ -80,16 +84,18 @@ irqreturn_t irqhandler(int irq, void *info)
             pdx->video[ch].irq_done_flag = 1;
             ack_mask |= vbit;
 
+            // FIXME: migrate to WRITE_ONCE / READ_ONCE
             if (!atomic_read(&pdx->video[ch].dma_busy)) {
                 /* Read which half of the ring the DMA is writing to */
                 u32 toggle = readl(pdx->bar0_base + HWS_REG_VBUF_TOGGLE(ch)) & 0x01;
+                dma_rmb();   /* make sure DMA writes are visible before we look at data */
+                u8 last = READ_ONCE(pdx->video[ch].last_buf_half_toggle);
 
-                if (pdx->video_data[ch] != toggle) {
-                    pdx->video_data[ch]        = toggle;
-                    pdx->audio[ch].wr_idx = toggle;
-                    tasklet_schedule(&pdx->video[ch].video_bottom_half);
+                if (last != toggle) {
+                        WRITE_ONCE(pdx->video[ch].last_buf_half_toggle, toggle);
+                        tasklet_schedule(&pdx->video[ch].video_bottom_half);
                 } else {
-                    pdx->video[ch].half_done_cnt = 0;
+                        pdx->video[ch].half_done_cnt = 0;
                 }
             }
         }

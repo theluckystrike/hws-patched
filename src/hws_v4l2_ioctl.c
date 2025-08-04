@@ -84,32 +84,6 @@ static struct v4l2_queryctrl g_hws_ctrls[] = {
 #define ARRAY_SIZE_OF_CTRL (sizeof(g_hws_ctrls) / sizeof(g_hws_ctrls[0]))
 
 
-#if 0
-static unsigned int find_Next_Ctl_ID(unsigned int id)
-{
-	int i;
-	int nextID =-1;
-	int curr_index =-1;
-	//scan supported queryctrl table
-	for( i=0; i<ARRAY_SIZE_OF_CTRL; i++ )
-	{
-		if(g_hws_ctrls[i].id==id)
-		{
-			curr_index = i;
-			break;
-		}
-	}
-	if(curr_index != -1)
-	{
-		if((curr_index +1)<ARRAY_SIZE_OF_CTRL)
-		{
-			nextID = g_hws_ctrls[curr_index +1].id;
-		}
-	}
-	return nextID;
-}
-#endif
-
 static int hws_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 {
 	struct hws_video *vid =

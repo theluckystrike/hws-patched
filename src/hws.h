@@ -317,6 +317,7 @@ struct hws_video {
 	int						 half_done_cnt;		/* half-buffer IRQ count */
 	u8						 irq_event;			/* last IRQ event code   */
 	bool					 irq_done_flag;		/* irq handler finished  */
+    u8                      last_buf_half_toggle;
 
 	/* ───── misc counters ───── */
 	int						 signal_loss_cnt;	/* no-video counter      */
@@ -393,6 +394,7 @@ struct hws_audio {
 	u8						 irq_event;			/* last IRQ event code   */
 	bool					 stream_running;	/* was audio_running     */
 	atomic_t				stop_requested;	/* was audio_stop        */
+    u32                      audio_buf_toggle_state;
 
 	/* ───── ring-buffer layout ───── */
 	int						 ring_offset_bytes;		/* DMA start offset     */
