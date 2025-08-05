@@ -252,12 +252,10 @@ struct hws_video {
 	/* ───── linkage ───── */
 	struct hws_pcie_dev		*parent;		/* parent device */
 
-	struct video_device		 video_device;
+	struct video_device		 *video_device;
 	struct vb2_queue			 buffer_queue;
 	struct list_head			 capture_queue;
 
-	/* ───── stream bookkeeping ───── */
-	atomic_t                 sequence_number;
 
 	/* ───── locking ───── */
 	struct mutex			 state_lock;		  /* primary state */
@@ -266,9 +264,12 @@ struct hws_video {
 
 	/* ───── format / standard ───── */
 	u32						 pixel_format;		  /* e.g. V4L2_PIX_FMT_YUYV */
+	int						 output_width;
+	int						 output_height;
+	int						 output_frame_rate;
+	int						 output_pixel_format;
 
 	/* ───── indices ───── */
-	int						 query_index;
 	int						 channel_index;
 
 	/* ───── async helpers ───── */
@@ -284,44 +285,24 @@ struct hws_video {
 	int						 current_saturation;
 	int						 current_hue;
 
-	/* ───── active output configuration ───── */
-	int						 output_width;
-	int						 output_height;
-	int						 output_frame_rate;
-	int						 output_pixel_format;
-	int						 output_size_index;
-
 	/* ───── V4L2 controls ───── */
 	struct v4l2_ctrl_handler control_handler;
 	struct v4l2_ctrl		*detect_tx_5v_control;
 	struct v4l2_ctrl		*hotplug_detect_control;
 
-	/* ───── DMA video-buffer bookkeeping ───── */
-	dma_addr_t				 buf_phys_addr;		/* physical DMA address */
-	u8						*buf_virt;			/* CPU-mapped pointer    */
-	u32						 buf_size_bytes;	/* total buffer size     */
-	u32						 buf_high_wmark;	/* high-watermark thresh */
-
 	/* ───── capture queue status ───── */
 	struct vcap_status		 queue_status[MAX_VIDEO_QUEUE];
 	struct acap_video_info	 chan_info;			/* HW-specific metadata  */
 	struct hws_video_fmt	 fmt_curr;			/* current format        */
-	bool					 size_changed_flag; /* resolution switch     */
 
 	/* ───── per-channel capture state ───── */
 	bool					 cap_active;		/* was vcap_started      */
-	atomic_t                                 dma_busy;			/* was video_busy        */
+	bool 					 dma_busy;			/* was video_busy        */
 	atomic_t				 stop_requested;	/* was video_stop        */
-	int						 rd_idx;			/* read pointer          */
-	int						 wr_idx;			/* write pointer         */
-	int						 half_done_cnt;		/* half-buffer IRQ count */
-	u8						 irq_event;			/* last IRQ event code   */
-	bool					 irq_done_flag;		/* irq handler finished  */
-    u8                      last_buf_half_toggle;
+	u8                      last_buf_half_toggle;
 
 	/* ───── misc counters ───── */
 	int						 signal_loss_cnt;	/* no-video counter      */
-	int						 sw_fps;			/* software frame rate   */
 };
 
 
