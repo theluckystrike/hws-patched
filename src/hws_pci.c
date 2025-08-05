@@ -210,7 +210,6 @@ static void hws_adapters_init(struct hws_pcie_dev *dev)
 		height = dev->video[index].queue_status[0].height;
 
 		dev->video[index].output_pixel_format = 0;
-		dev->video[index].output_size_index = 0;
 		dev->video[index].output_width = width;
 		dev->video[index].output_height = height;
 		dev->video[index].output_frame_rate = 60;
@@ -494,7 +493,7 @@ static void hws_remove(struct pci_dev *pdev)
 	}
 
 	for (i = 0; i < hdev->cur_max_video_ch; i++) {
-		vdev = &hdev->video[i].video_device;
+		vdev = hdev->video[i].video_device;
 		video_unregister_device(vdev);
 		// FIXME: need to understand if we're cleaning this up correctly
 		// v4l2_device_unregister(&hdev->video[i].video_device);
@@ -541,7 +540,6 @@ static int hws_video_init_channel(struct hws_pcie_dev *pdev, int ch)
 	/* ── basic identity / defaults ───────────────────────────────── */
 	vid->parent              = pdev;
 	vid->channel_index       = ch;
-	vid->query_index         = 0;
 
 	/* default incoming signal info */
 	vid->pixel_format        = V4L2_PIX_FMT_YUYV;
@@ -551,7 +549,6 @@ static int hws_video_init_channel(struct hws_pcie_dev *pdev, int ch)
 	vid->output_height       = 1080;
 	vid->output_frame_rate   = 60;
 	vid->output_pixel_format = V4L2_PIX_FMT_YUYV;
-	vid->output_size_index   = 0;
 
 	/* colour controls : mid-range baseline (0x80) */
 	vid->current_brightness  =
@@ -565,12 +562,6 @@ static int hws_video_init_channel(struct hws_pcie_dev *pdev, int ch)
 	spin_lock_init(&vid->irq_lock);
 
 	INIT_LIST_HEAD(&vid->capture_queue);
-
-	/* ── DMA bookkeeping is “empty” for now ─────────────────────── */
-	vid->buf_phys_addr   = 0;
-	vid->buf_virt        = NULL;
-	vid->buf_size_bytes  = 0;
-	vid->buf_high_wmark  = 0;
 
 	/* ── capture-queue / VCAP status defaults ───────────────────── */
 	for (q = 0; q < MAX_VIDEO_QUEUE; q++) {
@@ -598,18 +589,10 @@ static int hws_video_init_channel(struct hws_pcie_dev *pdev, int ch)
 
 	/* ── per-channel runtime flags / counters ───────────────────── */
 	vid->cap_active       = false;
-	atomic_set(&vid->dma_busy, 0);
+    vid->dma_busy = 0;
 
-	atomic_set(&vid->stop_requested, 0);
-	vid->rd_idx           = 0;
-	vid->wr_idx           = 0;
-	vid->half_done_cnt    = 0;
-	vid->irq_event        = 0;
-	vid->irq_done_flag    = false;
-
+    vid->stop_requested = 0;
 	vid->signal_loss_cnt  = 0;
-	vid->sw_fps           = 0;
-	atomic_set(&vid->sequence_number, 0);
 
 	/* ── V4L2 control handler (optional but mirrors old code) ───── */
 	v4l2_ctrl_handler_init(hdl, 1);

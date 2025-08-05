@@ -298,7 +298,7 @@ struct hws_video {
 	/* ───── per-channel capture state ───── */
 	bool					 cap_active;		/* was vcap_started      */
 	bool 					 dma_busy;			/* was video_busy        */
-	atomic_t				 stop_requested;	/* was video_stop        */
+	bool                     stop_requested;	/* was video_stop        */
 	u8                      last_buf_half_toggle;
 
 	/* ───── misc counters ───── */
