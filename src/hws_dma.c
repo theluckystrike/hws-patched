@@ -184,3 +184,30 @@ void hws_set_dma_address(struct hws_pcie_dev *hws)
 	/* Enable PCIe interrupts for all sources */
 	writel(0x003fffff, hws->bar0_base + INT_EN_REG_BASE);
 }
+
+static void hws_program_video_from_vb2(struct hws_pcie_dev *hws,
+                                       unsigned int ch,
+                                       struct vb2_buffer *vb)
+{
+    const u32 addr_mask     = PCI_E_BAR_ADD_MASK;
+    const u32 addr_low_mask = PCI_E_BAR_ADD_LOWMASK;
+    const u32 table_off     = 0x208 + ch * 8;   /* one 64-bit slot per ch */
+
+    dma_addr_t paddr = vb2_dma_contig_plane_dma_addr(vb, 0);
+    u32 lo = lower_32_bits(paddr);
+    u32 hi = upper_32_bits(paddr);
+    u32 pci_addr = lo & addr_low_mask;
+    lo &= addr_mask;
+
+    /* 64-bit BAR remap entry for this channel */
+    writel(hi, hws->bar0_base + PCI_ADDR_TABLE_BASE + table_off);
+    writel(lo, hws->bar0_base + PCI_ADDR_TABLE_BASE + table_off + PCIE_BARADDROFSIZE);
+
+    /* Capture engine per-channel registers */
+    writel((ch + 1) * PCIEBAR_AXI_BASE + pci_addr,
+           hws->bar0_base + CBVS_IN_BUF_BASE  + ch * PCIE_BARADDROFSIZE);
+
+    /* If your HW still uses half-buffer toggling, keep programming half_size */
+    writel(hws->video[ch].fmt_curr.half_size / 16,
+           hws->bar0_base + CBVS_IN_BUF_BASE2 + ch * PCIE_BARADDROFSIZE);
+}
