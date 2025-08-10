@@ -204,6 +204,7 @@ void hws_init_video_sys(struct hws_pcie_dev *hws, bool enable)
     writel(0x00000000, hdev->bar0_base + HWS_REG_DEC_MODE);
 
     /* 2) point DMA pointers at our buffers */
+    // FIXME: remove
     hws_set_dma_address(hws);
 
     /* 3) on a full reset, clear all per-channel status and indices */
