@@ -342,54 +342,25 @@ struct hws_video {
 /*  Per-channel AUDIO state                                             */
 /* ───────────────────────────────────────────────────────────────────── */
 struct hws_audio {
-	/* ───── linkage ───── */
-	struct hws_pcie_dev		*parent;			/* back-pointer */
+    /* linkage */
+    struct hws_pcie_dev       *parent;
+    int                        channel_index;
 
-	/* ───── ALSA objects ───── */
-	struct snd_card			*sound_card;		/* from snd_card_new()   */
-	struct snd_pcm_substream *pcm_substream;
+    /* ALSA */
+    struct snd_pcm_substream  *pcm_substream;
 
-	/* ───── async helper ───── */
-	struct work_struct		 audio_work;
-	struct tasklet_struct  audio_bottom_half;
+    /* stream state */
+    bool                       cap_active;
+    bool                       stream_running;
+    bool                       stop_requested;
 
-	/* ───── indexing & position ───── */
-	int						 channel_index;		/* 0 … MAX_VID_CHANNELS-1 */
-	int						 buffer_position;	/* current head (bytes)  */
+    /* minimal HW period tracking (optional) */
+    u8                         last_period_toggle;   // or hw_period index
 
-	struct acap_audio_info	 chan_info;			/* HW-specific metadata  */
-
-	/* ───── DMA audio-buffer bookkeeping ───── */
-	dma_addr_t				 buf_phys_addr;		/* physical DMA address  */
-	u8						*buf_virt;			/* CPU-mapped pointer    */
-	u8						*data_buf;			/* raw PCM payload       */
-	u8						*data_area;			/* ALSA channel area ptr */
-	u32						 buf_size_bytes;	/* total buffer size     */
-	u32						 buf_high_wmark;	/* high-watermark thresh */
-
-	/* ───── per-channel capture state ───── */
-	bool					 cap_active;		/* was acap_started      */
-	atomic_t					dma_busy;			/* was audio_busy        */
-	u8						 wr_idx;			/* write index           */
-	int						 rd_idx;			/* read  index           */
-	u8						 irq_event;			/* last IRQ event code   */
-	bool					 stream_running;	/* was audio_running     */
-	atomic_t				stop_requested;	/* was audio_stop        */
-    u32                      audio_buf_toggle_state;
-
-	/* ───── ring-buffer layout ───── */
-	int						 ring_offset_bytes;		/* DMA start offset     */
-	int						 ring_overflow_bytes;	/* overrun protection   */
-	spinlock_t				 ring_lock;				/* guards fields below  */
-	u32						 ring_write_pos_frames;	/* write ptr (frames)   */
-	u32						 ring_size_frames;		/* total size (frames)  */
-	u32						 period_size_frames;	/* ALSA period size     */
-	u32						 period_used_frames;	/* frames consumed      */
-
-	/* ───── PCM format ───── */
-	u32						 output_sample_rate;	/* Hz                   */
-	u16						 channel_count;		/* 1 = mono, 2 = stereo */
-	u16						 bits_per_sample;	/* 16, 24, 32 …         */
+    /* PCM format (for HW programming) */
+    u32                        output_sample_rate;
+    u16                        channel_count;
+    u16                        bits_per_sample;
 };
 
 /*
