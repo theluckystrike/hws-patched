@@ -259,7 +259,6 @@ struct hws_video {
 
 	/* ───── locking ───── */
 	struct mutex			 state_lock;		  /* primary state */
-	struct mutex			 capture_queue_lock; /* list_head guard */
 	spinlock_t				 irq_lock;			  /* ISR-side */
 
 	/* ───── format / standard ───── */
@@ -400,10 +399,6 @@ struct hws_pcie_dev {
 	struct pci_dev			*pdev;
 	struct hws_audio		audio[MAX_VID_CHANNELS];
 	struct hws_video		video[MAX_VID_CHANNELS];
-
-	/* ───── synchronisation ───── */
-	spinlock_t				videoslock[MAX_VID_CHANNELS];
-	spinlock_t				audiolock[MAX_VID_CHANNELS];
 
 	/* ───── BAR & workqueues ───── */
 	void __iomem              *bar0_base;

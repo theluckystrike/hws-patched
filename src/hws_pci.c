@@ -321,9 +321,8 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
 	if (ret < 0) {
         dev_err(&pci_dev->dev, "%s: MSI setup failed: %d\n",
                 __func__, ret);
-		goto err_destroy_wq;
+		goto err_free_irq;
 	}
-
 
 	// FIXME: Clear/ack any pending bits in the device before requesting irq and enabling MSI
 	ret = hws_irq_setup(hws_dev);
@@ -348,8 +347,6 @@ err_unregister_video:
 err_free_irq:
     hws_disable_msi(hws_dev);
     /* devm_free_irq() is implicit */
-err_destroy_wq:
-	hws_disable_msi(hws_dev);
 err_stop_thread:
         if (!IS_ERR_OR_NULL(hws_dev->main_task))
                 kthread_stop(hws_dev->main_task);
@@ -641,94 +638,51 @@ static int hws_audio_init_channel(struct hws_pcie_dev *pdev, int ch)
 	aud->channel_count       = 2;
 	aud->bits_per_sample     = 16;
 
-	/* ── synchronisation primitives / workers ──────────────────── */
-	spin_lock_init(&aud->ring_lock);
-
-	/* ── ring-buffer bookkeeping defaults ──────────────────────── */
-	aud->ring_size_frames      = 0;
-	aud->ring_write_pos_frames = 0;
-	aud->period_size_frames    = 0;
-	aud->period_used_frames    = 0;
-	aud->ring_offset_bytes     = 0;
-	aud->ring_overflow_bytes   = 0;
-
-	/* ── DMA pointers zero-ed until buffer alloc happens ───────── */
-	aud->buf_phys_addr   = 0;
-	aud->buf_virt        = NULL;
-	aud->data_buf        = NULL;
-	aud->data_area       = NULL;
-	aud->buf_size_bytes  = 0;
-	aud->buf_high_wmark  = 0;
-
 	/* ── capture-state flags ───────────────────────────────────── */
 	aud->cap_active      = false;
-	atomic_set(&aud->dma_busy, 0);
-
 	aud->stream_running  = false;
-	atomic_set(&aud->stop_requested, 0);
-	aud->wr_idx          = 0;
-	aud->rd_idx          = 0;
-	aud->irq_event       = 0;
+	aud->stop_requested  = false;
 
-
-	/* ── ALSA card skeleton (optional for minimal build) ───────── */
-	err = snd_card_new(&pdev->pdev->dev, -1, NULL,
-			   THIS_MODULE, 0, &aud->sound_card);
-	if (err)
-		return err;
-
-	/* ── per-queue software status (if you keep acap_audio_info) – */
-	for (q = 0; q < MAX_AUDIO_QUEUE; q++) {
-		aud->chan_info.status[q].lock = MEM_UNLOCK;
-		aud->chan_info.audio_buf[q]   = NULL;
-	}
-
-	/* ── channel-specific spin-lock on parent dev ──────────────── */
-	spin_lock_init(&pdev->audiolock[ch]);
-
-	/* ── per-channel tasklet for ISR bottom-half ──────────────── */
-        tasklet_init(&aud->audio_bottom_half,
-                     hws_dpc_audio,
-                     pack_dev_ch(pdev, ch));
-
+	/* HW period tracking sentinel (optional) */
+	aud->last_period_toggle = 0xFF;  /* means “never toggled yet” */
 
 	return 0;
 }
 
 static void hws_audio_cleanup_channel(struct hws_pcie_dev *pdev, int ch)
 {
-    struct hws_audio *aud = &pdev->audio[ch];
-    int q;
+	struct hws_audio *aud;
+	unsigned long pcm_flags;
 
-    /* ── kill the tasklet (bottom-half) ───────────────────────── */
-    tasklet_kill(&pdev->audio[ch].audio_bottom_half);
+	if (!pdev)
+		return;
 
-    /* ── unregister & free the ALSA card ───────────────────────── */
-    if (aud->sound_card) {
-        snd_card_free(aud->sound_card);
-        aud->sound_card = NULL;
-    }
+	aud = &pdev->audio[ch];
 
-    /* ── free DMA buffer if allocated ──────────────────────────── */
-    if (aud->data_buf) {
-        /* if you used pci_alloc_consistent / dma_alloc_coherent: */
-        dma_free_coherent(&pdev->pdev->dev,
-                          aud->buf_size_bytes,
-                          aud->data_buf,
-                          aud->buf_phys_addr);
-        aud->data_buf = NULL;
-        aud->buf_phys_addr = 0;
-        aud->buf_size_bytes = 0;
-    }
+	/* 1) Stop the hardware stream if it's running (your stop routine). */
+	if (READ_ONCE(aud->stream_running)) {
+		/* Must disable channel IRQs, stop DMA, flush/ack status, etc. */
+		hws_audio_hw_stop(pdev, ch);   /* implement in your HW layer */
+		WRITE_ONCE(aud->stream_running, false);
+	}
 
-    /* ── clear per-queue info ──────────────────────────────────── */
-    for (q = 0; q < MAX_AUDIO_QUEUE; q++) {
-        aud->chan_info.audio_buf[q] = NULL;
-        aud->chan_info.status[q].lock = MEM_UNLOCK;
-    }
+	/* 2) Clear runtime flags. */
+	aud->cap_active     = false;
+	aud->stop_requested = false;
 
-    /* ── (Optional) zero the struct so repeated init/cleanup safe ─ */
-    memset(aud, 0, sizeof(*aud));
+	/* 3) If the device is going away while ALSA stream is open, notify ALSA. */
+	if (device_going_away && aud->pcm_substream) {
+		snd_pcm_stream_lock_irqsave(aud->pcm_substream, pcm_flags);
+		snd_pcm_stop(aud->pcm_substream, SNDRV_PCM_STATE_DISCONNECTED);
+		snd_pcm_stream_unlock_irqrestore(aud->pcm_substream, pcm_flags);
+		aud->pcm_substream = NULL;
+	}
+
+	/* 4) Reset optional book-keeping. */
+	aud->last_period_toggle = 0xFF;   /* sentinel: “never toggled” */
+
+	/* format defaults (rate/ch/bits) can be left as-is or reset if you prefer */
+}
 }
 
 static struct hws_pcie_dev *hws_alloc_dev_instance(struct pci_dev *pdev)
