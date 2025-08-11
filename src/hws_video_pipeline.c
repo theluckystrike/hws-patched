@@ -20,6 +20,74 @@ struct copy_ctx {
     bool interlace;
 };
 
+void hws_set_dma_address(struct hws_pcie_dev *hws)
+{
+	u32 addr_mask     = PCI_E_BAR_ADD_MASK;
+	u32 addr_low_mask = PCI_E_BAR_ADD_LOWMASK;
+	u32 table_off     = 0x208;          /* first entry in PCI addr table */
+	int i;
+
+	for (i = 0; i < hws->max_channels; i++, table_off += 8) {
+		/* ───────────── VIDEO DMA entry ───────────── */
+		if (hws->video[i].buf_virt) {
+			dma_addr_t paddr  = hws->video[i].buf_phys_addr;
+			u32 lo           = lower_32_bits(paddr);
+			u32 hi           = upper_32_bits(paddr);
+			u32 pci_addr     = lo & addr_low_mask;
+			lo              &= addr_mask;
+
+			/* Program the 64-bit BAR remap entry */
+			writel(hi, hws->bar0_base + PCI_ADDR_TABLE_BASE + table_off);
+			writel(lo, hws->bar0_base + PCI_ADDR_TABLE_BASE + table_off + PCIE_BARADDROFSIZE);
+
+			/* CBVS buffer address + half-frame length */
+			writel((i + 1) * PCIEBAR_AXI_BASE + pci_addr, hws->bar0_base + CBVS_IN_BUF_BASE  + i * PCIE_BARADDROFSIZE);
+
+			writel(hws->video[i].fmt_curr.half_size / 16, hws->bar0_base + CBVS_IN_BUF_BASE2 + i * PCIE_BARADDROFSIZE);
+		}
+
+		/* ───────────── AUDIO tail entry ───────────── */
+		if (hws->audio[i].buf_virt) {
+			dma_addr_t paddr  = hws->audio[i].buf_phys_addr;
+			u32 pci_addr     = lower_32_bits(paddr) & addr_low_mask;
+
+			writel((i + 1) * PCIEBAR_AXI_BASE + pci_addr, hws->bar0_base + 
+				CBVS_IN_BUF_BASE + (8 + i) * PCIE_BARADDROFSIZE
+				);
+		}
+	}
+
+	/* Enable PCIe interrupts for all sources */
+	writel(0x003fffff, hws->bar0_base + INT_EN_REG_BASE);
+}
+
+// FIXME: use correctly, should be in ipc
+static void hws_program_video_from_vb2(struct hws_pcie_dev *hws,
+                                       unsigned int ch,
+                                       struct vb2_buffer *vb)
+{
+    const u32 addr_mask     = PCI_E_BAR_ADD_MASK;
+    const u32 addr_low_mask = PCI_E_BAR_ADD_LOWMASK;
+    const u32 table_off     = 0x208 + ch * 8;   /* one 64-bit slot per ch */
+
+    dma_addr_t paddr = vb2_dma_contig_plane_dma_addr(vb, 0);
+    u32 lo = lower_32_bits(paddr);
+    u32 hi = upper_32_bits(paddr);
+    u32 pci_addr = lo & addr_low_mask;
+    lo &= addr_mask;
+
+    /* 64-bit BAR remap entry for this channel */
+    writel(hi, hws->bar0_base + PCI_ADDR_TABLE_BASE + table_off);
+    writel(lo, hws->bar0_base + PCI_ADDR_TABLE_BASE + table_off + PCIE_BARADDROFSIZE);
+
+    /* Capture engine per-channel registers */
+    writel((ch + 1) * PCIEBAR_AXI_BASE + pci_addr,
+           hws->bar0_base + CBVS_IN_BUF_BASE  + ch * PCIE_BARADDROFSIZE);
+
+    /* If your HW still uses half-buffer toggling, keep programming half_size */
+    writel(hws->video[ch].fmt_curr.half_size / 16,
+           hws->bar0_base + CBVS_IN_BUF_BASE2 + ch * PCIE_BARADDROFSIZE);
+}
 
 static inline u32 hws_read_port_hpd(struct hws_pcie_dev *pdx, int port)
 {
