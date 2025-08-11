@@ -407,8 +407,6 @@ struct hws_pcie_dev {
 
 	/* ───── BAR & workqueues ───── */
 	void __iomem              *bar0_base;
-	struct workqueue_struct   *video_wq;
-	struct workqueue_struct   *audio_wq;
 
 	/* ───── interrupt bookkeeping ───── */
 	int                        irq_line;          /* < 0 = none */

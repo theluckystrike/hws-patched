@@ -283,9 +283,6 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
 	pcie_set_readrq(pci_dev, 128);
 #endif
 
-	hws_dev->video_wq = NULL;
-	hws_dev->audio_wq = NULL;
-
 	read_chip_id(hws_dev);
     /* Initialize each video/audio channel */
     for (i = 0; i < hws_dev->max_channels; i++) {
@@ -318,18 +315,6 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
     }
 
 	hws_adapters_init(hws_dev);
-
-	hws_dev->video_wq = create_singlethread_workqueue("hws");
-	if (!hws_dev->video_wq) {
-		    ret = -ENOMEM;
-		    goto err_stop_thread;
-	}
-
-	hws_dev->audio_wq = create_singlethread_workqueue("hws-audio");
-	if (!hws_dev->audio_wq) {
-		    ret = -ENOMEM;
-		    goto err_destroy_wq;
-	}
 
 	ret = probe_scan_for_msi(hws_dev, pci_dev);
 
@@ -364,10 +349,6 @@ err_free_irq:
     hws_disable_msi(hws_dev);
     /* devm_free_irq() is implicit */
 err_destroy_wq:
-	if (hws_dev->video_wq)
-        destroy_workqueue(hws_dev->video_wq);
-	if (hws_dev->audio_wq)
-		destroy_workqueue(hws_dev->audio_wq);
 	hws_disable_msi(hws_dev);
 err_stop_thread:
         if (!IS_ERR_OR_NULL(hws_dev->main_task))
@@ -500,18 +481,6 @@ static void hws_remove(struct pci_dev *pdev)
 		// v4l2_device_unregister(&hdev->video[i].video_device);
 		v4l2_ctrl_handler_free(&hdev->video[i].control_handler);
 	}
-    /* flush & destroy workqueues */
-    if (hdev->video_wq) {
-        flush_workqueue(hdev->video_wq);
-        destroy_workqueue(hdev->video_wq);
-        hdev->video_wq = NULL;
-    }
-
-    if (hdev->audio_wq) {
-        flush_workqueue(hdev->audio_wq);
-        destroy_workqueue(hdev->audio_wq);
-        hdev->audio_wq = NULL;
-    }
 
 	if (hdev->msix_enabled) {
 		pci_disable_msix(pdev);
