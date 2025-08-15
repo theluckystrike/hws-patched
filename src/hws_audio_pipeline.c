@@ -12,6 +12,8 @@
 #include <sound/rawmidi.h>
 #include <sound/initval.h>
 
+// FIXME
+extern size_t hws_audio_dma_wptr_bytes(struct hws_pcie_dev *hws, unsigned int ch);
 
 struct snd_pcm_hardware audio_pcm_hardware = {
 	.info = (SNDRV_PCM_INFO_MMAP | SNDRV_PCM_INFO_INTERLEAVED |
@@ -32,68 +34,49 @@ struct snd_pcm_hardware audio_pcm_hardware = {
 
 int hws_start_audio_capture(struct hws_pcie_dev *hws, unsigned int index)
 {
-	int j, ret;
+	if (!hws || ch >= hws->max_channels)
+		return -EINVAL;
 
-	if (hws->cap_active[ch]) {
-		ret = hws_check_audio_capture(hws, ch);
-		if (ret == 0) {
-		    hws_check_card_status(hws);
-		    hws_enable_audio_capture(hws, ch, true);
+	/* If already active, ensure HW bit is set and return success. */
+	if (hws->audio[ch].stream_running) {
+		if (!hws_check_audio_capture(hws, ch)) {
+			hws_check_card_status(hws);
+			hws_enable_audio_capture(hws, ch, true);
 		}
 		dev_dbg(&hws->pdev->dev,
-			"audio channel %u already active, re‑enabled\n", ch);
-		return -EBUSY;
+			"audio ch %u already running, ensured enabled\n", ch);
+		return 0;
 	}
-    /* Make sure card is healthy */
-    hws_check_card_status(hws);
 
-    /* Mark stream running and clear stop flag */
-    hws->stream_running[ch] = true;
-    atomic_set(&hws->audio[ch].stop_requested, 0);
+	/* Make sure card is healthy */
+	hws_check_card_status(hws);
 
-    /* Reset ring pointers and data pointer */
+	hws->audio[ch].stop_requested = false;
+	hws->audio[ch].stream_running = true;
 
-    hws->audio[ch].wr_idx   = 0;
-    hws->audio[ch].rd_idx   = 0;
-    hws->data_buf[ch] = NULL;
+	/* Kick off the hardware DMA */
+	hws_enable_audio_capture(hws, ch, true);
 
-    /* Unlock any leftover buffers in the queue */
-    for (j = 0; j < MAX_AUDIO_QUEUE; ++j)
-        hws->audio_info[ch].status[j].lock = MEM_UNLOCK;
-
-    /* Tell the work handler the queue is live */
-    hws->audio_info[ch].is_running = true;
-
-    /* Kick off the hardware DMA */
-    hws_enable_audio_capture(hws, ch, true);
-
-    dev_dbg(&hws->pdev->dev,
-            "audio capture started on channel %u\n", ch);
-    return 0;
+	dev_dbg(&hws->pdev->dev, "audio capture started on ch %u\n", ch);
+	return 0;
 }
 
 static void hws_stop_audio_capture(struct hws_pcie_dev *hws,
                                    unsigned int ch)
 {
-    /* nothing to do if not currently running */
-    if (!hws->stream_running[ch])
-        return;
+	if (!hws || ch >= hws->max_channels)
+		return;
 
-    /* mark stream stopped */
-    hws->stream_running[ch] = false;
-    atomic_set(&hws->audio[ch].stop_requested, 1);
+	if (!hws->audio[ch].stream_running)
+		return;
 
-    /* reset write pointer for a fresh restart */
-    hws->audio[ch].wr_idx = 0;
+	hws->audio[ch].stop_requested = true;
+	hws->audio[ch].stream_running = false;
 
-    /* disable the work‑queue handler */
-    hws->audio_info[ch].is_running = false;
+	/* Shut off the DMA in hardware */
+	hws_enable_audio_capture(hws, ch, false);
 
-    /* shut off the DMA in hardware */
-    hws_enable_audio_capture(hws, ch, false);
-
-    dev_dbg(&hws->pdev->dev,
-            "audio capture stopped on channel %u\n", ch);
+	dev_dbg(&hws->pdev->dev, "audio capture stopped on ch %u\n", ch);
 }
 
 void hws_enable_audio_capture(struct hws_pcie_dev *hws,
@@ -140,99 +123,106 @@ static inline bool hws_check_audio_capture(struct hws_pcie_dev *hws,
 static snd_pcm_uframes_t
 hws_pcie_audio_pointer(struct snd_pcm_substream *substream)
 {
-	struct hws_audio *drv = snd_pcm_substream_chip(substream);
-	//struct snd_pcm_runtime *runtime = substream->runtime;
-	snd_pcm_uframes_t pos;
-	int dwAudioCh;
-	unsigned long flags;
-	dwAudioCh = drv->index;
-	//printk(KERN_INFO "%s() index:%x\n",__func__,dwAudioCh);
-	spin_lock_irqsave(&drv->ring_lock, flags); //spin_lock
-	pos = drv->ring_wpos_byframes;
-	spin_unlock_irqrestore(&drv->ring_lock, flags); //spin_unlock
-	return pos;
+	struct hws_audio *a = snd_pcm_substream_chip(sub);
+	struct snd_pcm_runtime *rt = sub->runtime;
+	struct hws_pcie_dev *hws = a->parent;
+	unsigned int ch = a->channel_index;
+
+	/* Read HW write offset (bytes from base, already wrapped) */
+	size_t off_bytes = hws_audio_dma_wptr_bytes(hws, ch);
+	return bytes_to_frames(rt, off_bytes % rt->dma_bytes);
 }
 
-int hws_pcie_audio_open(struct snd_pcm_substream *substream)
+int hws_pcie_audio_open(struct snd_pcm_substream *sub)
 {
-	struct hws_audio *drv = snd_pcm_substream_chip(substream);
-	struct snd_pcm_runtime *runtime = substream->runtime;
+	struct hws_audio *a = snd_pcm_substream_chip(sub);
+	struct snd_pcm_runtime *rt = sub->runtime;
 
-	drv->sample_rate_out = 48000;
-	drv->channels = 2;
-	//printk(KERN_INFO "%s() index:%x\n",__func__,drv->index);
-	runtime->hw = audio_pcm_hardware;
-	drv->substream = substream;
-	//snd_pcm_hw_constraint_minmax(runtime,SNDRV_PCM_HW_PARAM_RATE,setrate,setrate);
+	rt->hw = audio_pcm_hardware;
+	a->pcm_substream = sub;
+
+	/* If HDMI exposes per-port caps, relax/override here (rates/formats/channels) */
+	/* e.g., update rt->hw.rates |= SNDRV_PCM_RATE_44100; etc. */
+
+	/* Integer periods are typical for DMA engines */
+	snd_pcm_hw_constraint_integer(rt, SNDRV_PCM_HW_PARAM_PERIODS);
+
+	/* If your HW needs period alignment (e.g., 32B), add a constraint here. */
+
 	return 0;
 }
 
 int hws_pcie_audio_close(struct snd_pcm_substream *substream)
 {
-	//	struct hws_audio *chip = snd_pcm_substream_chip(substream);
-	//printk(KERN_INFO "%s() \n",__func__);
+	struct hws_audio *a = snd_pcm_substream_chip(sub);
+	a->pcm_substream = NULL;
 	return 0;
 }
 int hws_pcie_audio_hw_params(struct snd_pcm_substream *substream,
 			     struct snd_pcm_hw_params *hw_params)
 {
-	//printk(KERN_INFO "%s() \n",__func__);
-	return snd_pcm_lib_malloc_pages(substream,
-					params_buffer_bytes(hw_params));
+	/* Using preallocation done at registration time; nothing to do. */
+	return 0;
 }
 
 int hws_pcie_audio_hw_free(struct snd_pcm_substream *substream)
 {
-	//printk(KERN_INFO "%s() \n",__func__);
-	return snd_pcm_lib_free_pages(substream);
+	return 0;
 }
 
 int hws_pcie_audio_prepare(struct snd_pcm_substream *substream)
 {
-	struct snd_pcm_runtime *runtime = substream->runtime;
-	struct hws_audio *drv = snd_pcm_substream_chip(substream);
-	//struct hws_pcie_dev *dev= drv->dev;
-	//int i;
-	unsigned long flags;
-	//printk(KERN_INFO "%s() index:%x\n",__func__,drv->index);
+	// FIXME: program the card with DMA here
+	struct hws_audio *a = snd_pcm_substream_chip(sub);
+	struct hws_pcie_dev *hws = a->parent;
+	struct snd_pcm_runtime *rt = sub->runtime;
+	unsigned int ch = a->channel_index;
 
-	spin_lock_irqsave(&drv->ring_lock, flags);
-	drv->ring_size_byframes = runtime->buffer_size;
-	drv->ring_wpos_byframes = 0;
-	drv->period_size_byframes = runtime->period_size;
-	drv->period_used_byframes = 0;
-	drv->ring_offsize = 0;
-	drv->ring_over_size = 0;
-	spin_unlock_irqrestore(&drv->ring_lock, flags);
+	/* Program your DMA with ALSA-owned buffer */
+	dma_addr_t dma_base   = rt->dma_addr;
+	u32        buf_bytes  = rt->dma_bytes;
+	u32        per_bytes  = frames_to_bytes(rt, rt->period_size);
+
+	/* Program HW: base address, buffer size, period size, and audio format */
+	hws_prog_dma_base(hws, ch, dma_base, buf_bytes);
+	hws_prog_dma_period(hws, ch, per_bytes);
+	hws_prog_audio_fmt(hws, ch,
+			   /* sample rate */ 48000,            /* or from HDMI caps */
+			   /* channels    */ 2,
+			   /* format      */ SNDRV_PCM_FORMAT_S16_LE);
+
+	/* Clear any per-channel SW tracking if you keep it */
+	a->last_period_toggle = 0;
 
 	return 0;
 }
 
 int hws_pcie_audio_trigger(struct snd_pcm_substream *substream, int cmd)
 {
-    struct hws_audio    *audio = snd_pcm_substream_chip(substream);
-    struct hws_pcie_dev *hws   = audio->parent;           /* was dev */
-    unsigned int         ch    = audio->channel_index;    /* was index */
-    int                  err   = 0;
+
+	struct hws_audio *a = snd_pcm_substream_chip(sub);
+	struct hws_pcie_dev *hws = a->parent;
+	unsigned int ch = a->channel_index;
 
     dev_dbg(&hws->pdev->dev,
             "audio trigger %d on channel %u\n", cmd, ch);
     switch (cmd) {
-    case SNDRV_PCM_TRIGGER_START:
-        audio->ring_write_pos_frames = 0;  /* was ring_wpos_byframes */
-        audio->period_used_frames    = 0;  /* was period_used_byframes */
-	// FIXME
-        hws_start_audio_capture(hws, ch);
-        break;
-
-    case SNDRV_PCM_TRIGGER_STOP:
-	// FIXME
-        hws_stop_audio_capture(hws, ch);
-        break;
-
-    default:
-        err = -EINVAL;
-        break;
+	case SNDRV_PCM_TRIGGER_START:
+		return hws_start_audio_capture(hws, ch);
+	case SNDRV_PCM_TRIGGER_STOP:
+		hws_stop_audio_capture(hws, ch);
+		return 0;
+	case SNDRV_PCM_TRIGGER_RESUME:
+	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
+		/* if HW supports, re-enable; otherwise treat like START */
+		return hws_start_audio_capture(hws, ch);
+	case SNDRV_PCM_TRIGGER_SUSPEND:
+	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
+		/* if HW supports pause, disable engine; otherwise treat like STOP */
+		hws_stop_audio_capture(hws, ch);
+		return 0;
+	default:
+		return -EINVAL;
     }
 
     return err;
