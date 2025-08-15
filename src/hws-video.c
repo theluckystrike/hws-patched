@@ -28,6 +28,17 @@
 #define FRAME_DONE_MARK 0x55AAAA55
 
 //-------------------------------------------
+/* One vb2 buffer wrapper per frame */
+struct hwsvideo_buffer {
+	struct vb2_v4l2_buffer vb;
+	struct list_head       queue;   /* linked on hws_video.capture_queue */
+};
+
+/* Convenience cast */
+static inline struct hwsvideo_buffer *to_hwsbuf(struct vb2_buffer *vb)
+{
+	return container_of(to_vb2_v4l2_buffer(vb), struct hwsvideo_buffer, vb);
+}
 
 void hws_set_dma_address(struct hws_pcie_dev *hws)
 {
@@ -173,24 +184,20 @@ void hws_enable_video_capture(struct hws_pcie_dev *hws,
                                      unsigned int chan,
                                      bool on)
 {
-    u32 status;
+	u32 status;
 
-    /* bail if the PCI device is lost or chan out of range */
-    if (hws->pci_lost || chan >= hws->max_channels)
-        return;
+	if (!hws || hws->pci_lost || chan >= hws->max_channels)
+		return;
 
-    /* read-modify-write the bitmask register */
-    status = readl(hws->bar0_base + HWS_REG_VCAP_ENABLE);
-    if (on)
-        status |= BIT(chan);
-    else
-        status &= ~BIT(chan);
+	status = readl(hws->bar0_base + HWS_REG_VCAP_ENABLE);
+	status = on ? (status | BIT(chan)) : (status & ~BIT(chan));
+	writel(status, hws->bar0_base + HWS_REG_VCAP_ENABLE);
+	(void)readl(hws->bar0_base + HWS_REG_VCAP_ENABLE);
 
-    /* track state in our per-channel struct */
-    hws->video[chan].cap_active = on;
+	hws->video[chan].cap_active = on;
 
-    /* write it back */
-    writel(status, hdev->bar0_base + HWS_REG_VCAP_ENABLE);
+	dev_dbg(&hws->pdev->dev, "vcap %s ch%u (reg=0x%08x)\n",
+		on ? "ON" : "OFF", chan, status);
 }
 
 void check_card_status(struct hws_pcie_dev *pdx)
@@ -495,10 +502,10 @@ static int hws_open(struct file *file)
     struct hws_video *vid = video_drvdata(file);
 
     /* Hard-fail additional opens while a capture is active */
-    if (!v4l2_fh_is_singular_file(file) && vb2_is_busy(vid->queue))
+    if (!v4l2_fh_is_singular_file(file) && vb2_is_busy(&vid->buffer_queue))
         return -EBUSY;
 
-    return 0;          /* nothing else to count */
+    return 0;
 }
 
 static int hws_release(struct file *file)
@@ -553,118 +560,122 @@ static int hws_queue_setup(struct vb2_queue *q, unsigned int *num_buffers,
 			   unsigned int *num_planes, unsigned int sizes[],
 			   const struct device *alloc_devs[])
 {
-	struct hws_video *videodev = q->drv_priv;
-	struct hws_pcie_dev *pdx = videodev->dev;
-	unsigned long flags;
-    size_t size, tmp;
+	struct hws_video *vid = q->drv_priv;
+	struct hws_pcie_dev *hws = vid->parent;
+	size_t size, tmp;
 
-	if (vb2_is_busy(q))
-        return -EBUSY;
+	/* One plane: YUYV (2 bytes/pixel). Use current programmed OUT WxH. */
+	if (check_mul_overflow(vid->fmt_curr.width, vid->fmt_curr.height, &tmp) ||
+	    check_mul_overflow(tmp, 2, &size))
+		return -EOVERFLOW;
 
-	// FIXME: Get smart on lock scope, might be better to not spin lock
-	// on this scope to do overflow math
-	spin_lock_irqsave(&pdx->videoslock[videodev->channel_index], flags);
-
-    if (check_mul_overflow(videodev->current_out_width, videodev->current_out_height, &tmp) ||
-        check_mul_overflow(tmp, 2, &size)) {
-		spin_unlock_irqrestore(&pdx->videoslock[videodev->channel_index],
-				       flags);
-        return -EOVERFLOW;
-    }
-    size = PAGE_ALIGN(size);
+	size = PAGE_ALIGN(size);
 
 	if (*num_planes) {
-        int ret = sizes[0] < size ? -EINVAL : 0;
-        spin_unlock_irqrestore(
-            &pdx->videoslock[videodev->channel_index], flags);
-        return ret;
+		if (sizes[0] < size)
+			return -EINVAL;
+		return 0;
 	}
-	*num_planes = 1;
-	sizes[0] = size;
-    alloc_devs[0]    = &pdx->pdev->dev;
-	spin_unlock_irqrestore(&pdx->videoslock[videodev->channel_index], flags);
+
+	*num_planes   = 1;
+	sizes[0]      = size;
+	if (alloc_devs)
+		alloc_devs[0] = &hws->pdev->dev; /* dma-contig device */
+
+	/* Optional: ensure a minimum number of buffers */
+	if (*num_buffers < 3)
+		*num_buffers = 3;
+
 	return 0;
 }
 
 static int hws_buffer_prepare(struct vb2_buffer *vb)
 {
-	struct vb2_v4l2_buffer *vbuf = to_vb2_v4l2_buffer(vb);
-	struct hwsvideo_buffer *buf =
-		container_of(vbuf, struct hwsvideo_buffer, vb);
-	struct hws_video *videodev = vb->vb2_queue->drv_priv;
-	struct hws_pcie_dev *pdx = videodev->dev;
-	u32 size;
-	unsigned long flags;
+	struct hws_video *vid = vb->vb2_queue->drv_priv;
+	size_t need = (size_t)vid->fmt_curr.width * vid->fmt_curr.height * 2;
 
-	spin_lock_irqsave(&pdx->videoslock[videodev->channel_index], flags);
-	size = 2 * videodev->current_out_width *
-	       videodev->current_out_height; // 16bit
-	if (vb2_plane_size(vb, 0) < size) {
-		spin_unlock_irqrestore(&pdx->videoslock[videodev->channel_index],
-				       flags);
+	if (vb2_plane_size(vb, 0) < need)
 		return -EINVAL;
-	}
-	vb2_set_plane_payload(vb, 0, size);
-	buf->mem = vb2_plane_vaddr(vb, 0);
-	spin_unlock_irqrestore(&pdx->videoslock[videodev->channel_index], flags);
+
+	vb2_set_plane_payload(vb, 0, need);
 	return 0;
 }
 
 static void hws_buffer_queue(struct vb2_buffer *vb)
 {
-	struct vb2_v4l2_buffer *vbuf = to_vb2_v4l2_buffer(vb);
-	struct hws_video *videodev = vb->vb2_queue->drv_priv;
-	struct hwsvideo_buffer *buf =
-		container_of(vbuf, struct hwsvideo_buffer, vb);
+	struct hws_video *vid = vb->vb2_queue->drv_priv;
+	struct hwsvideo_buffer *buf = to_hwsbuf(vb);
 	unsigned long flags;
-	struct hws_pcie_dev *pdx = videodev->dev;
 
-	spin_lock_irqsave(&pdx->videoslock[videodev->channel_index], flags);
-	list_add_tail(&buf->queue, &videodev->queue);
-	spin_unlock_irqrestore(&pdx->videoslock[videodev->channel_index], flags);
+	spin_lock_irqsave(&vid->irq_lock, flags);
+	list_add_tail(&buf->queue, &vid->capture_queue);
+
+	/* If streaming and no in-flight buffer, prime HW immediately */
+	if (vid->cap_active && !vid->cur) {
+		vid->cur = buf;
+		hws_program_video_from_vb2(vid->parent, vid->channel_index, &buf->vb.vb2_buf);
+		/* Arm engine if not already */
+		hws_enable_video_capture(vid->parent, vid->channel_index, true);
+	}
+	spin_unlock_irqrestore(&vid->irq_lock, flags);
 }
 
 static int hws_start_streaming(struct vb2_queue *q, unsigned int count)
 {
-	struct hws_video *videodev = q->drv_priv;
+	struct hws_video *vid = q->drv_priv;
 	unsigned long flags;
-	struct hws_pcie_dev *pdx = videodev->dev;
 
-	atomic_set(&videodev->sequence_number, 0);
-	//---------------
-	// FIXME: This function sucks
-	StartVideoCapture(videodev->dev, videodev->channel_index);
-
-	spin_lock_irqsave(&pdx->videoslock[videodev->channel_index], flags);
-	while (!list_empty(&videodev->queue)) {
-		struct hwsvideo_buffer *buf = list_entry(
-			videodev->queue.next, struct hwsvideo_buffer, queue);
-		list_del(&buf->queue);
-
-		vb2_buffer_done(&buf->vb.vb2_buf, VB2_BUF_STATE_ERROR);
+	/* Must have at least one queued buffer to start */
+	spin_lock_irqsave(&vid->irq_lock, flags);
+	if (list_empty(&vid->capture_queue)) {
+		spin_unlock_irqrestore(&vid->irq_lock, flags);
+		return -ENOSPC;
 	}
-	spin_unlock_irqrestore(&pdx->videoslock[videodev->channel_index], flags);
-	//-----------------------
+
+	vid->stop_requested      = false;
+	vid->last_buf_half_toggle = 0;
+	vid->half_seen           = false;
+
+	/* Prime first buffer and start HW */
+	vid->cur = list_first_entry(&vid->capture_queue,
+	                            struct hwsvideo_buffer, queue);
+	list_del(&vid->cur->queue);
+
+	hws_program_video_from_vb2(vid->parent, vid->channel_index,
+	                           &vid->cur->vb.vb2_buf);
+
+	hws_enable_video_capture(vid->parent, vid->channel_index, true);
+	vid->cap_active = true;
+
+	spin_unlock_irqrestore(&vid->irq_lock, flags);
+
 	return 0;
 }
 
 static void hws_stop_streaming(struct vb2_queue *q)
 {
-	struct hws_video *videodev = q->drv_priv;
+	struct hws_video *vid = q->drv_priv;
 	unsigned long flags;
-	struct hws_pcie_dev *pdx = videodev->dev;
-	//-----------------------------------
-	StopVideoCapture(videodev->dev, videodev->index);
-	//------------------
-	spin_lock_irqsave(&pdx->videoslock[videodev->index], flags);
-	while (!list_empty(&videodev->queue)) {
-		struct hwsvideo_buffer *buf = list_entry(
-			videodev->queue.next, struct hwsvideo_buffer, queue);
-		list_del(&buf->queue);
-		vb2_buffer_done(&buf->vb.vb2_buf, VB2_BUF_STATE_ERROR);
+
+	/* Stop HW first */
+	hws_enable_video_capture(vid->parent, vid->channel_index, false);
+
+	spin_lock_irqsave(&vid->irq_lock, flags);
+	vid->cap_active = false;
+	vid->stop_requested = true;
+
+	/* Return in-flight (if any) + all queued as ERROR */
+	if (vid->cur) {
+		vb2_buffer_done(&vid->cur->vb.vb2_buf, VB2_BUF_STATE_ERROR);
+		vid->cur = NULL;
 	}
-	spin_unlock_irqrestore(&pdx->videoslock[videodev->index], flags);
-//-----------------------------------------------------------------
+	while (!list_empty(&vid->capture_queue)) {
+		struct hwsvideo_buffer *b = list_first_entry(&vid->capture_queue,
+			struct hwsvideo_buffer, queue);
+		list_del(&b->queue);
+		vb2_buffer_done(&b->vb.vb2_buf, VB2_BUF_STATE_ERROR);
+	}
+	spin_unlock_irqrestore(&vid->irq_lock, flags);
 }
 
 static const struct vb2_ops hwspcie_video_qops = {
