@@ -286,19 +286,24 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
 	read_chip_id(hws_dev);
     /* Initialize each video/audio channel */
     for (i = 0; i < hws_dev->max_channels; i++) {
+	// FIXME: Fields have changed
         ret = hws_video_init_channel(hws_dev, i);
         if (ret)
             goto err_cleanup_channels;
+
+	// FIXME: Fields have changed
         ret = hws_audio_init_channel(hws_dev, i);
         if (ret)
             goto err_cleanup_channels;
     }
 
+    /* FIXME: removed
 	ret = hws_dma_mem_alloc(hws_dev);
 	if (ret != 0) {
 		goto err_free_dma;
 	}
 
+    */
 	// FIXME: making changes in DMA register setting
 	hws_init_video_sys(hws_dev, 0);
 
@@ -338,6 +343,8 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
 		goto err_free_irq;
 
     // FIXME: `audio_data_process` which gets set/called from this func sucks
+    // this is where the audio devices get created, if we need to set the DMA address for the 
+    // it would be a good point to check here
 	if (hws_audio_register(hws_dev))
 		goto err_unregister_video;
 	return 0;
@@ -497,89 +504,74 @@ static void hws_remove(struct pci_dev *pdev)
 /* ------------------------------------------------------------------ */
 static int hws_video_init_channel(struct hws_pcie_dev *pdev, int ch)
 {
-	struct hws_video         *vid = &pdev->video[ch];
-	struct v4l2_ctrl_handler *hdl = &vid->control_handler;
-	int                       q;
+	struct hws_video *vid;
+	struct v4l2_ctrl_handler *hdl;
 
-	/* ── hard-reset the whole per-channel struct ─────────────────── */
+	/* basic sanity */
+	if (!pdev || ch < 0 || ch >= pdev->max_channels)
+		return -EINVAL;
+
+	vid = &pdev->video[ch];
+
+	/* hard reset the per-channel struct */
 	memset(vid, 0, sizeof(*vid));
 
-	/* ── basic identity / defaults ───────────────────────────────── */
-	vid->parent              = pdev;
-	vid->channel_index       = ch;
+	/* identity */
+	vid->parent        = pdev;
+	vid->channel_index = ch;
 
-	/* default incoming signal info */
-	vid->pixel_format        = V4L2_PIX_FMT_YUYV;
+	/* locks & lists */
+	mutex_init(&vid->state_lock);
+	spin_lock_init(&vid->irq_lock);
+	INIT_LIST_HEAD(&vid->capture_queue);
+	vid->cur = NULL;
 
-	/* default outgoing (scaled) geometry */
-	vid->output_width        = 1920;
-	vid->output_height       = 1080;
-	vid->output_frame_rate   = 60;
-	vid->output_pixel_format = V4L2_PIX_FMT_YUYV;
+	/* optional: set up the tasklet if you use it elsewhere */
+	/* tasklet_setup(&vid->video_bottom_half, hws_video_tasklet); */
 
-	/* colour controls : mid-range baseline (0x80) */
-	vid->current_brightness  =
-	vid->current_contrast    =
-	vid->current_saturation  =
+	/* default format (safe 1080p; adjust to your real HW default) */
+	vid->fmt_curr.width  = 1920;
+	vid->fmt_curr.height = 1080;
+
+	/* color controls default (mid-scale) */
+	vid->current_brightness  = 0x80;
+	vid->current_contrast    = 0x80;
+	vid->current_saturation  = 0x80;
 	vid->current_hue         = 0x80;
 
-	/* ── kernel synchronisation primitives ───────────────────────── */
-	mutex_init(&vid->state_lock);
-	mutex_init(&vid->capture_queue_lock);
-	spin_lock_init(&vid->irq_lock);
+	/* capture state */
+	vid->cap_active           = false;
+	vid->stop_requested       = false;
+	vid->last_buf_half_toggle = 0;
+	vid->half_seen            = false;
+	vid->signal_loss_cnt      = 0;
 
-	INIT_LIST_HEAD(&vid->capture_queue);
-
-	/* ── capture-queue / VCAP status defaults ───────────────────── */
-	for (q = 0; q < MAX_VIDEO_QUEUE; q++) {
-		/* HW status mirror */
-		vid->queue_status[q].lock       = MEM_UNLOCK;
-		// vid->queue_status[q].channel    = ;
-		// vid->queue_status[q].size       = ;
-		vid->queue_status[q].field      = 0;
-		vid->queue_status[q].path       = 2;
-		vid->queue_status[q].width      = 1920;
-		vid->queue_status[q].height     = 1080;
-		vid->queue_status[q].interlace  = 0;
-
-		// FIXME: not in original?
-		vid->queue_status[q].fps        = 60;
-		vid->queue_status[q].out_width  = 1920;
-		vid->queue_status[q].out_height = 1080;
-		// vid->queue_status[q].hdcp       = ;
-		// FIXME: not in original?
-
-		/* software helper struct (acap_video_info) */
-		vid->chan_info.status[q].lock     = MEM_UNLOCK;
-		vid->chan_info.video_buf[q]       = NULL;
-	}
-
-	/* ── per-channel runtime flags / counters ───────────────────── */
-	vid->cap_active       = false;
-    vid->dma_busy = 0;
-
-    vid->stop_requested = 0;
-	vid->signal_loss_cnt  = 0;
-
-	/* ── V4L2 control handler (optional but mirrors old code) ───── */
-	v4l2_ctrl_handler_init(hdl, 1);
+	/* V4L2 controls:
+	 * Expose +5V and HPD as volatile, read-only detection bits.
+	 * (Skip/adjust if your HW doesn’t support these or uses different CIDs.)
+	 */
+	hdl = &vid->control_handler;
+	v4l2_ctrl_handler_init(hdl, 2);
 
 	vid->detect_tx_5v_control = v4l2_ctrl_new_std(hdl, &hws_ctrl_ops,
-					V4L2_CID_DV_RX_POWER_PRESENT,
-					0, 1, 1, 0);
+		V4L2_CID_DV_RX_POWER_PRESENT, 0, 1, 1, 0);
 	if (vid->detect_tx_5v_control)
 		vid->detect_tx_5v_control->flags |=
 			V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_READ_ONLY;
 
-	if (hdl->error) {
-		dev_err(&pdev->pdev->dev,
-			"V4L2 ctrl init failed on ch%d: %d\n",
-			ch, hdl->error);
-		return hdl->error;
-	}
+	vid->hotplug_detect_control = v4l2_ctrl_new_std(hdl, &hws_ctrl_ops,
+		V4L2_CID_DV_RX_HOTPLUG, 0, 1, 1, 0);
+	if (vid->hotplug_detect_control)
+		vid->hotplug_detect_control->flags |=
+			V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_READ_ONLY;
 
-	/* ── per-channel locks kept in the parent dev ──────────────── */
-	spin_lock_init(&pdev->videoslock[ch]);
+	if (hdl->error) {
+		int err = hdl->error;
+		dev_err(&pdev->pdev->dev,
+			"v4l2 ctrl init failed on ch%d: %d\n", ch, err);
+		v4l2_ctrl_handler_free(hdl);
+		return err;
+	}
 
 	return 0;
 }
