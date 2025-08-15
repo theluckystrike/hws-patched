@@ -288,20 +288,9 @@ void hws_init_video_sys(struct hws_pcie_dev *hws, bool enable)
     /* 3) on a full reset, clear all per-channel status and indices */
     if (!enable) {
         for (i = 0; i < hws->max_channels; i++) {
-            struct vcap_status *vs = hws->video[i].queue_status;
-
-            for (j = 0; j < MAX_VIDEO_QUEUE; j++) {
-                vs[j].lock      = MEM_UNLOCK;
-                vs[j].path      = 2;
-                vs[j].field     = 0;
-                vs[j].interlace = 0;
-            }
-
-            /* reset audio write pointer */
-            hws->audio[i].wr_idx = 0;
-
             /* helpers to arm/disable capture engines */
             hws_enable_video_capture(hws, i, false);
+	    // FIXME: use false here
             hws_enable_audio_capture(hws, i, 0);
         }
     }
