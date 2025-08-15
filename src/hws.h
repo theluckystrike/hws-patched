@@ -111,30 +111,6 @@ struct vcap_status {
 	// FIXME: not in original?
 };
 
-struct acap_video_info
-{
-    u8                *video_buf[MAX_VIDEO_QUEUE];
-	u8                *video_area[MAX_VIDEO_QUEUE];
-	int                buf_size[4];
-	struct vcap_status status[MAX_VIDEO_QUEUE];
-	u32                index;
-	u8                *scaler_buf;
-	u8                *yuv2_buf;
-	u8                *rotate_buf;
-	u32                running;
-};
-
-struct acap_audio_info {
-	u8                 *audio_buf[MAX_AUDIO_QUEUE];
-	u8                 *audio_area[MAX_AUDIO_QUEUE];
-	struct {
-		u32 length;
-		u32 lock;
-	}                   status[MAX_AUDIO_QUEUE];
-	u32                index;
-	u32                running;
-};
-
 typedef enum 
 {
    StandardNone				= 0x80000000,
@@ -255,28 +231,18 @@ struct hws_video {
 	struct video_device		 *video_device;
 	struct vb2_queue			 buffer_queue;
 	struct list_head			 capture_queue;
+	struct hwsvideo_buffer *cur; // the in-flight VB2 buffer
 
 
 	/* ───── locking ───── */
 	struct mutex			 state_lock;		  /* primary state */
 	spinlock_t				 irq_lock;			  /* ISR-side */
 
-	/* ───── format / standard ───── */
-	u32						 pixel_format;		  /* e.g. V4L2_PIX_FMT_YUYV */
-	int						 output_width;
-	int						 output_height;
-	int						 output_frame_rate;
-	int						 output_pixel_format;
-
 	/* ───── indices ───── */
 	int						 channel_index;
 
 	/* ───── async helpers ───── */
-	struct work_struct		 video_work;
 	struct tasklet_struct  video_bottom_half;
-
-	/* ───── misc flags ───── */
-	bool					 interlaced;
 
 	/* ───── colour controls ───── */
 	int						 current_brightness;
@@ -290,15 +256,13 @@ struct hws_video {
 	struct v4l2_ctrl		*hotplug_detect_control;
 
 	/* ───── capture queue status ───── */
-	struct vcap_status		 queue_status[MAX_VIDEO_QUEUE];
-	struct acap_video_info	 chan_info;			/* HW-specific metadata  */
 	struct hws_video_fmt	 fmt_curr;			/* current format        */
 
 	/* ───── per-channel capture state ───── */
 	bool					 cap_active;		/* was vcap_started      */
-	bool 					 dma_busy;			/* was video_busy        */
 	bool                     stop_requested;	/* was video_stop        */
 	u8                      last_buf_half_toggle;
+	bool half_seen; // if your HW uses two half-frame toggles
 
 	/* ───── misc counters ───── */
 	int						 signal_loss_cnt;	/* no-video counter      */
