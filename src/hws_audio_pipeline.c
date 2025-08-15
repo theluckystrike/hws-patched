@@ -249,139 +249,124 @@ struct snd_pcm_ops hws_pcie_pcm_ops = { .open = hws_pcie_audio_open,
 
 int hws_audio_register(struct hws_pcie_dev *hws)
 {
-	struct snd_card *card;
-	struct snd_pcm *pcm;
-	int ret, i;
-	char name[32];
+	struct snd_card *card = NULL;
+	struct snd_pcm  *pcm  = NULL;
+	char card_id[16];
+	char card_name[64];
+	int i, ret;
+
 	if (!hws)
 		return -EINVAL;
 
+	/* ---- Create a single ALSA card for this PCI function ---- */
+	snprintf(card_id, sizeof(card_id), "hws%u", hws->port_id);     /* <=16 chars */
+	snprintf(card_name, sizeof(card_name), "HWS HDMI Audio %u", hws->port_id);
+
+	ret = snd_card_new(&hws->pdev->dev, -1 /* auto index */,
+	                   card_id, THIS_MODULE, 0, &card);
+	if (ret < 0) {
+		dev_err(&hws->pdev->dev, "snd_card_new failed: %d\n", ret);
+		return ret;
+	}
+
+	strscpy(card->driver,   KBUILD_MODNAME, sizeof(card->driver));
+	strscpy(card->shortname, card_name,      sizeof(card->shortname));
+	strscpy(card->longname,  card->shortname, sizeof(card->longname));
+
+	/* ---- Create one PCM capture device per HDMI input ---- */
 	for (i = 0; i < hws->max_channels; i++) {
-		/* build a unique audio device name */
-		ret = snprintf(name, sizeof(name), "%s %d",
-		               HWS_AUDIO_NAME,
-		               hws->port_id * hws->cur_max_video_ch +
-		               i + 1);
-		if (ret < 0 || ret >= sizeof(name)) {
-			dev_err(&hws->pdev->dev,
-			        "audio_register: name snprintf failed\n");
-			ret = -EINVAL;
-			goto error;
-		}
+		char pcm_name[32];
 
-		ret = snd_card_new(&hws->pdev->dev, -1, name, THIS_MODULE,
-				   sizeof(struct hws_audio), &card);
+		snprintf(pcm_name, sizeof(pcm_name), "HDMI In %d", i);
+
+		/* device number = i → userspace sees hw:X,i */
+		ret = snd_pcm_new(card, pcm_name, i,
+		                  0 /* playback */, 1 /* capture */, &pcm);
 		if (ret < 0) {
-			dev_err(&hws->pdev->dev,
-			        "snd_card_new failed: %d\n", ret);
-			goto error;
+			dev_err(&hws->pdev->dev, "snd_pcm_new(%d) failed: %d\n", i, ret);
+			goto error_card;
 		}
 
-		/* set up card fields */
-		strscpy(card->driver,   KBUILD_MODNAME, sizeof(card->driver));
-		strscpy(card->shortname, name,           sizeof(card->shortname));
-		strscpy(card->longname,  card->shortname,
-		        sizeof(card->longname));
+		/* Tie this PCM to channel i */
+		hws->audio[i].parent        = hws;
+		hws->audio[i].channel_index = i;
+		hws->audio[i].pcm_substream = NULL;
+		hws->audio[i].cap_active    = false;
+		hws->audio[i].stream_running= false;
+		hws->audio[i].stop_requested= false;
+		hws->audio[i].last_period_toggle = 0;
+		hws->audio[i].output_sample_rate = 48000;  /* will be set at open/prepare if HDMI varies */
+		hws->audio[i].channel_count      = 2;
+		hws->audio[i].bits_per_sample    = 16;
 
-		ret = snd_pcm_new(card, name, 0, 0, 1, &pcm);
-		if (ret < 0) {
-			dev_err(&hws->pdev->dev,
-			        "snd_pcm_new failed: %d\n", ret);
-			snd_card_free(card);
-			goto error;
-		}
-
-		hws->audio[i].index = i;
-		hws->audio[i].parent= hws;
 		pcm->private_data = &hws->audio[i];
-		strscpy(pcm->name, name, sizeof(pcm->name));
-		snd_pcm_set_ops(pcm, SNDRV_PCM_STREAM_CAPTURE,
-		                &hws_pcie_pcm_ops);
+		strscpy(pcm->name, pcm_name, sizeof(pcm->name));
+		snd_pcm_set_ops(pcm, SNDRV_PCM_STREAM_CAPTURE, &hws_pcie_pcm_ops);
 
-		/* set up DMA buffers */
+		/* ALSA-owned DMA buffer, device-visible (no scratch buffer) */
 		ret = snd_pcm_lib_preallocate_pages_for_all(
-			pcm, SNDRV_DMA_TYPE_CONTINUOUS,
-			snd_dma_continuous_data(GFP_KERNEL),
+			pcm,
+			SNDRV_DMA_TYPE_DEV,
+			&hws->pdev->dev,
 			audio_pcm_hardware.buffer_bytes_max,
 			audio_pcm_hardware.buffer_bytes_max);
-
 		if (ret < 0) {
 			dev_err(&hws->pdev->dev,
-			        "pcm preallocate failed: %d\n", ret);
-			snd_card_free(card);
-			goto error;
+				"preallocate pages (dev) failed on ch %d: %d\n", i, ret);
+			goto error_card;
 		}
-
-		//----------------------------
-		dev->audio[i].output_sample_rate = 48000;
-		dev->audio[i].channel_count = 2;
-		dev->audio[i].resampled_buffer_size =
-			dev->audio[i].output_sample_rate *
-			2 *
-			dev->audio[i].channel_count;
-
-		hws->audio[i].resampled_buf =
-			kzalloc(hws->audio[i].resampled_buf_size, GFP_KERNEL);
-		if (!hws->audio[i].resampled_buf) {
-			dev_err(&hws->pdev->dev,
-			        "resample buffer alloc failed\n");
-			snd_card_free(card);
-			ret = -ENOMEM;
-			goto error;
-		}
-
-		spin_lock_init(&hws->audio[i].ring_lock);
-		INIT_WORK(&hws->audio[i].audio_work, audio_data_process);
-		ret = snd_card_register(card);
-		if (ret < 0) {
-			dev_err(&hws->pdev->dev,
-			        "snd_card_register failed: %d\n", ret);
-			snd_card_free(card);
-			goto error;
-		}
-		hws->audio[i].card = card;
 	}
-	dev_info(&hws->pdev->dev, "audio registration complete (%d channels)\n",
-	         hws->cur_max_video_ch);
+
+	/* Register the card once all PCMs are created */
+	ret = snd_card_register(card);
+	if (ret < 0) {
+		dev_err(&hws->pdev->dev, "snd_card_register failed: %d\n", ret);
+		goto error_card;
+	}
+
+	/* Store the single card handle (optional: also mirror to each channel if you like) */
+	hws->snd_card = card;
+	dev_info(&hws->pdev->dev, "audio registration complete (%d HDMI inputs)\n",
+	         hws->max_channels);
 	return 0;
-error:
-	/* unwind any channels that were successfully set up */
-	while (--i >= 0) {
-		if (hws->audio[i].card) {
-			snd_card_free(hws->audio[i].card);
-			hws->audio[i].card = NULL;
-		}
-		kfree(hws->audio[i].resampled_buf);
-		hws->audio[i].resampled_buf = NULL;
-	}
+
+error_card:
+	/* Frees all PCMs created on it as well */
+	snd_card_free(card);
 	return ret;
 }
 
 void hws_audio_unregister(struct hws_pcie_dev *hws)
 {
-    int i;
+	int i;
 
-    if (!hws)
-        return;
+	if (!hws)
+		return;
 
-    /* For each channel, cancel work, free the ALSA card, and drop the resample buffer */
-    for (i = 0; i < hws->cur_max_video_ch; i++) {
-        struct hws_audio *aud = &hws->audio[i];
+	/* Quiesce hardware per channel before tearing ALSA down. */
+	for (i = 0; i < hws->max_channels; i++) {
+		struct hws_audio *a = &hws->audio[i];
 
-        /* Make sure any in-flight work is done */
-        cancel_work_sync(&aud->audiowork);
+		/* Stop capture if it’s running (idempotent). */
+		if (a->stream_running || a->cap_active)
+			hws_enable_audio_capture(hws, i, false);
 
-        /* Unregister and free the ALSA card (safe to call even if never registered) */
-        if (aud->card) {
-            snd_card_free(aud->card);
-            aud->card = NULL;
-        }
+		a->cap_active      = false;
+		a->stream_running  = false;
+		a->stop_requested  = false;
+		a->pcm_substream   = NULL;
 
-        /* Free our software resample buffer */
-        kfree(aud->resampled_buf);
-        aud->resampled_buf = NULL;
-    }
+	}
 
+	/*
+	 * Free the single ALSA card. This releases all PCM devices and their
+	 * ALSA-owned DMA buffers that were preallocated with
+	 * snd_pcm_lib_preallocate_pages_for_all().
+	 */
+	if (hws->snd_card) {
+		snd_card_free(hws->snd_card);
+		hws->snd_card = NULL;
+	}
     dev_info(&hws->pdev->dev, "audio unregistered (%d channels)\n",
              hws->cur_max_video_ch);
 }
