@@ -194,32 +194,14 @@ static int main_ks_thread_handle(void *data)
     return 0;
 }
 
-static void hws_adapters_init(struct hws_pcie_dev *dev)
-{
-	int index;
-	int width, height;
-	for (index = 0; index < MAX_VID_CHANNELS; index++) {
-		width = dev->video[index].queue_status[0].width;
-		height = dev->video[index].queue_status[0].height;
-
-		dev->video[index].output_pixel_format = 0;
-		dev->video[index].output_width = width;
-		dev->video[index].output_height = height;
-		dev->video[index].output_frame_rate = 60;
-		dev->video[index].interlaced = false;
-	}
-}
 
 /*
  * alloc_dev → 
- * enable_device → 
  * request_regions → 
  * ioremap → 
  * MSI scan / IRQ setup → 
  * chip-id + channel init → 
- * DMA alloc → 
  * helper kthread → 
- * work-queues → 
  * V4L2 / ALSA registration
  */
 static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id)
@@ -293,9 +275,9 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
 	// FIXME: making changes in DMA register setting
 	hws_init_video_sys(hws_dev, 0);
 
-    // NOTE: there are two loops, the `video_data_process` and this where we have periodic checks
+    // NOTE: there are two loops, need to check if the interrupt loop can see if the capture is running and signal 
+    // is lost. This was what it was: `video_data_process` where there were periodic checks
     // that we can see no video. `main_ks_thread_handle` calls `check_video_format` calls get_video_status`
-    // whereas the `video_data_process` checks a m_curr_No_Video instance which has since been refactored
    
     // FIXME: figure out if we can check update_hpd_status early and exit fast
     hws_dev->main_task = kthread_run(main_ks_thread_handle, (void *)hws_dev, "start_ks_thread_task");
@@ -304,8 +286,6 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
             hws_dev->main_task = NULL;
             goto err_cleanup_channels;
     }
-
-	hws_adapters_init(hws_dev);
 
 	ret = probe_scan_for_msi(hws_dev, pci_dev);
 
@@ -503,9 +483,6 @@ static int hws_video_init_channel(struct hws_pcie_dev *pdev, int ch)
 	INIT_LIST_HEAD(&vid->capture_queue);
 	vid->cur = NULL;
 
-	/* optional: set up the tasklet if you use it elsewhere */
-	/* tasklet_setup(&vid->video_bottom_half, hws_video_tasklet); */
-
 	/* default format (safe 1080p; adjust to your real HW default) */
 	vid->fmt_curr.width  = 1920;
 	vid->fmt_curr.height = 1080;
@@ -553,37 +530,73 @@ static int hws_video_init_channel(struct hws_pcie_dev *pdev, int ch)
 	return 0;
 }
 
-static void hws_video_cleanup_channel(struct hws_pcie_dev *pdev, int ch)
+static void hws_video_drain_queue_locked(struct hws_video *vid)
 {
-    struct hws_video *vid = &pdev->video[ch];
+	while (!list_empty(&vid->capture_queue)) {
+		struct hwsvideo_buffer *b =
+			list_first_entry(&vid->capture_queue,
+					 struct hwsvideo_buffer, list);
+		list_del_init(&b->list);
 
-    /* 1) Free all V4L2 controls */
-    v4l2_ctrl_handler_free(&vid->control_handler);
-    // FIXME: this only handles the memory created by init channel
+		/* Assuming your buffer wraps a vb2 buffer like:
+		 *   struct hwsvideo_buffer { struct vb2_v4l2_buffer vb; ... }
+		 * Adjust if your field is different.
+		 */
+		vb2_buffer_done(&b->vb.vb2_buf, VB2_BUF_STATE_ERROR);
+	}
+	vid->cur = NULL;
+}
 
-    /*
-     * 2) If you ever allocate a DMA buffer later (via
-     *    dma_alloc_coherent), free it here:
-     *
-     * if (vid->buf_virt) {
-     *     dma_free_coherent(pdev->pdev,
-     *                       vid->buf_size_bytes,
-     *                       vid->buf_virt,
-     *                       vid->buf_phys_addr);
-     *     vid->buf_virt       = NULL;
-     *     vid->buf_phys_addr  = 0;
-     *     vid->buf_size_bytes = 0;
-     * }
-     *
-     * 3) Any pending work on your capture queue list should be
-     *    drained or cancelled here.  For example, if you ever
-     *    queue work to a WQ you might do:
-     *
-     *    flush_workqueue(vid->your_workqueue);
-     *
-     * 4) Note: kernel mutexes, spinlocks and list heads
-     *    do not need explicit “destroy” calls.
-     */
+void hws_video_cleanup_channel(struct hws_pcie_dev *pdev, int ch)
+{
+	struct hws_video *vid;
+	unsigned long flags;
+
+	if (!pdev || ch < 0 || ch >= pdev->max_channels)
+		return;
+
+	vid = &pdev->video[ch];
+
+	/* --- Stop capture best-effort (device-specific hook if you have one) --- */
+	if (vid->cap_active) {
+		vid->stop_requested = true;
+		/* If you have a per-channel stop: hws_hw_stop_channel(pdev, ch); */
+		vid->cap_active = false;
+	}
+
+	/* --- Drain SW capture queue and in-flight buffer --- */
+	spin_lock_irqsave(&vid->irq_lock, flags);
+	hws_video_drain_queue_locked(vid);
+	spin_unlock_irqrestore(&vid->irq_lock, flags);
+
+	/* --- Release VB2 queue if it was initialized elsewhere --- */
+	/* Heuristic: ops non-NULL -> queue was set up. Safe to call once. */
+	if (vid->buffer_queue.ops)
+		vb2_queue_release(&vid->buffer_queue);
+
+	/* --- Free V4L2 controls --- */
+	v4l2_ctrl_handler_free(&vid->control_handler);
+
+	/* --- Optionally unregister the video_device if this function owns it --- */
+	if (vid->video_device) {
+		/* Only if you registered it with video_register_device() */
+		if (video_is_registered(vid->video_device))
+			video_unregister_device(vid->video_device);
+
+		/* Only if you allocated with video_device_alloc() */
+		/* video_device_release(vid->video_device); */
+		vid->video_device = NULL;
+	}
+
+	/* --- Reset cheap state (don’t memset the whole struct here) --- */
+	mutex_destroy(&vid->state_lock);
+	/* spinlocks don’t need explicit destruction */
+	INIT_LIST_HEAD(&vid->capture_queue);
+	vid->cur                 = NULL;
+	vid->stop_requested      = false;
+	vid->last_buf_half_toggle = 0;
+	vid->half_seen           = false;
+	vid->signal_loss_cnt     = 0;
 }
 
 
