@@ -264,14 +264,18 @@ void check_video_format(struct hws_pcie_dev *pdx)
 {
 	int i;
 	for (i = 0; i < pdx->cur_max_video_ch; i++) {
-        // FIXME: figure out if we can check update_hpd_status early and exit fast
+		// FIXME: figure out if we can check update_hpd_status early and exit fast
+		// get_video_status calls -> update_active_and_interlace_flags -> readl 
 		pdx->video[index].signal_loss_cnt = get_video_status(pdx, i);
 
-        /* If we just detected a loss on an active capture channel… */
+		/* If we just detected a loss on an active capture channel… */
 		if ((pdx->video[index].signal_loss_cnt  == 0x1) &&
 		    (pdx->video[index].cap_active == true)) {
-              /* …schedule the “no‐video” handler on the vido_wq workqueue */
-			queue_work(pdx->vido_wq, &pdx->video[i].videowork);
+		      /* …schedule the “no‐video” handler on the vido_wq workqueue */
+			// FIXME: this is where we can catch if the system has blanked on us
+			// probably need to rewire this, because we removed the videowork
+			// https://chatgpt.com/s/t_689fce8c84308191a15ec967d75165a7
+			// queue_work(pdx->vido_wq, &pdx->video[i].videowork);
 		}
 	}
 }
@@ -348,18 +352,24 @@ static bool update_hpd_status(struct hws_pcie_dev *pdx, unsigned int ch)
 /* ──────────────────────────────────────────────────────────────── */
 /* 1. Active / interlace flags                                     */
 /* ──────────────────────────────────────────────────────────────── */
-static bool update_active_and_interlace_flags(struct hws_pcie_dev *pdx,
-                                              unsigned int ch)
+static bool hws_update_active_interlace(struct hws_pcie_dev *pdx, unsigned int ch)
 {
-    // FIXME
-    u32  reg        = READ_REGISTER_ULONG(pdx, HWS_REG_ACTIVE_STATUS);
-    bool active_vid = !!((reg >> ch) & 0x01);
-    bool interlace  = !!(((reg >> 8) >> ch) & 0x01);
+	u32 reg;
+	bool active, interlace;
 
-    /* Track interlace in driver state so other paths don’t re-decode */
-    pdx->video[ch].queue_status[0].interlace = interlace;
+	/* Defensive: ensure channel is in range for this device */
+	if (ch >= HWS_MAX_CHANNELS)
+		return false;
 
-    return active_vid;               /* false → “no video” early-out   */
+	reg = readl(pdx->bar0_base + HWS_REG_ACTIVE_STATUS);
+
+	active    = !!(reg & BIT(ch));
+	interlace = !!(reg & BIT(8 + ch));
+
+	/* Cache interlace flag so other paths don't need to re-decode the register */
+	pdx->video[ch].queue_status[0].interlace = interlace;
+
+	return active;
 }
 
 /* ──────────────────────────────────────────────────────────────── */

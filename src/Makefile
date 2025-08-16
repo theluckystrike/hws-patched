@@ -1,7 +1,7 @@
 obj-m = HwsCapture.o
 
 HwsCapture-objs := \
-	 hws-pci.o \
+	 hws_pci.o \
 	 hws_interrupt.o \
 	 hws_dma.o \
 	 hws_scaler.o \
@@ -9,7 +9,7 @@ HwsCapture-objs := \
 	 hws-video.o \
 	 hws_v4l2_tables.o \
 	 hws_v4l2_ioctl.o \
-	 hws-audio.o 
+	 hws_audio.o 
 
 src := $(PWD)
 

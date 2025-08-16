@@ -6,11 +6,8 @@
 #include <media/v4l2-ctrls.h>
 
 #include "hws.h"
+#include "hws_audio.h"
 #include "hws_reg.h"
-#include "hws_dma.h"
-#include "hws_video_pipeline.h"
-#include "hws_audio_pipeline.h"
-#include "hws_interrupt.h"
 #include "hws_video.h"
 #include "hws_v4l2_ioctl.h"
 
@@ -27,10 +24,6 @@
 #define DEVINFO_YV12         GENMASK(31, 28)
 #define DEVINFO_HWKEY        GENMASK(27, 24)
 #define DEVINFO_PORTID       GENMASK(25, 24)   /* low 2 bits of HW-key */
-
-// FIXME: these are redefined once in hws.h and once here, figure out which is right
-// #define MAX_MM_VIDEO_SIZE     (1920 * 1080 * 2)
-// #define MAX_DMA_AUDIO_PK_SIZE (128 * 16 * 4)
 
 
 #define MAKE_ENTRY( __vend, __chip, __subven, __subdev, __configptr) {	\
@@ -297,13 +290,6 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
             goto err_cleanup_channels;
     }
 
-    /* FIXME: removed
-	ret = hws_dma_mem_alloc(hws_dev);
-	if (ret != 0) {
-		goto err_free_dma;
-	}
-
-    */
 	// FIXME: making changes in DMA register setting
 	hws_init_video_sys(hws_dev, 0);
 
@@ -316,7 +302,7 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
     if (IS_ERR(hws_dev->main_task)) {
             ret = PTR_ERR(hws_dev->main_task);
             hws_dev->main_task = NULL;
-            goto err_free_dma;
+            goto err_cleanup_channels;
     }
 
 	hws_adapters_init(hws_dev);
@@ -358,7 +344,6 @@ err_stop_thread:
         if (!IS_ERR_OR_NULL(hws_dev->main_task))
                 kthread_stop(hws_dev->main_task);
 err_free_dma:
-        hws_dma_mem_free(hws_dev);
 err_cleanup_channels:
     /* undo channels [0 .. i-1] */
     for (j = i - 1; j >= 0; j--) {
@@ -444,9 +429,6 @@ static void hws_stop_device(struct hws_pcie_dev *hws)
     /* 4) Mark the device as no longer running */
     hws->start_run = false;
 
-    /* 5) Free any DMA pools / buffer pools you allocated */
-    hws_dma_mem_free(hws);
-
     dev_dbg(&hws->pdev->dev, "hws_stop_device: complete\n");
 }
 
@@ -465,11 +447,6 @@ static void hws_remove(struct pci_dev *pdev)
 	hws_stop_device(hdev);
 	/* disable interrupts */
 	// hws_free_irqs(hdev);
-
-	for (i = 0; i < MAX_VID_CHANNELS; i++) {
-		tasklet_kill(&hdev->video[i].video_bottom_half);
-		tasklet_kill(&hdev->audio[i].audio_bottom_half);
-	}
 
 	for (i = 0; i < hdev->cur_max_video_ch; i++) {
 		if (hdev->audio[i].sound_card) {
