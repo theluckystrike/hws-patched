@@ -2,8 +2,13 @@
 #include <linux/pci.h>
 #include <linux/types.h>
 #include <linux/iopoll.h>
-#include <linux/iopoll.h>
 #include <linux/bitfield.h>
+#include <linux/module.h>
+#include <linux/init.h>
+#include <linux/kthread.h>
+#include <linux/interrupt.h>
+#include <linux/dma-mapping.h>
+
 
 #include <media/v4l2-ctrls.h>
 
@@ -39,10 +44,6 @@
 #define CH_SHIFT    2                    /* need 2 bits for 0-3            */
 #define CH_MASK     GENMASK(CH_SHIFT-1, 0)
 
-static inline unsigned long pack_dev_ch(struct hws_pcie_dev *dev, u32 ch)
-{
-        return (unsigned long)dev | ch;          /* dev is pointer-aligned   */
-}
 
 static const struct pci_device_id hws_pci_table[] = {
 	MAKE_ENTRY(0x8888, 0x9534, 0x8888, 0x0007, NULL),
@@ -639,12 +640,6 @@ static struct pci_driver hws_pci_driver = {
 	.remove = hws_remove,
 };
 
-#ifndef arch_msi_check_device
-int arch_msi_check_device(struct pci_dev *dev, int nvec, int type)
-{
-	return 0;
-}
-#endif
 
 MODULE_DEVICE_TABLE(pci, hws_pci_table);
 

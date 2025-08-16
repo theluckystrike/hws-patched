@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
-#ifndef _HWS_PCIE_H_
-#define _HWS_PCIE_H_
+#ifndef HWS_PCIE_H
+#define HWS_PCIE_H
 
 #include <linux/types.h>
 #include <linux/bitops.h>
@@ -14,8 +14,7 @@
 #include <media/v4l2-device.h>
 #include <media/videobuf2-dma-sg.h>
 
-#include <sound/core.h>
-#include <sound/pcm.h>
+struct snd_pcm_substream;
 
 //---------------------------------------------
 #define MAX_USER_IRQ 1
@@ -79,7 +78,8 @@
 #define CUR_AUDIO_PACKET_LENGTH		4096+34						// 250ms,  2*16,000=32,000 -> 1s
 #define AUDIO_ONE_QUEUE_SIZE		8*CUR_AUDIO_PACKET_LENGTH
 
-#define MAX_MM_VIDEO_SIZE			0x400000	//4M
+#include <linux/sizes.h>
+#define MAX_MM_VIDEO_SIZE            SZ_4M
 
 #define MAX_VIDEO_HW_W 1920
 #define MAX_VIDEO_HW_H 1080
@@ -140,20 +140,10 @@ enum hws_ioc_cmd {
 struct hws_pcie_dev;
 struct hws_adapter;
 
-
-/* buffer for one video frame */
 struct hwsvideo_buffer {
-	/* common v4l buffer stuff -- must be first */
-	struct vb2_v4l2_buffer	vb;
-	struct list_head		queue;
-	void *					mem;
-
-};
-
-struct hws_dmabuf{
-	u32                 size;
-	__le32					*cpu;
-	dma_addr_t				dma;	
+    struct vb2_v4l2_buffer vb;   /* must be first */
+    struct list_head       list; /* driver SW queue link */
+    void                  *mem;
 };
 
 /*
@@ -348,13 +338,6 @@ struct hws_pcie_dev {
 
 	/* ───── BAR & workqueues ───── */
 	void __iomem              *bar0_base;
-
-	/* ───── interrupt bookkeeping ───── */
-	int                        irq_line;          /* < 0 = none */
-	bool                       msi_enabled;
-	bool                       msix_enabled;
-	int                        irq_user_count;
-	struct msix_entry          msix_entries[32];
 
 	/* ───── device identity / capabilities ───── */
 	u16                        vendor_id;
