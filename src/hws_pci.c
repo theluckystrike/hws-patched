@@ -2,6 +2,8 @@
 #include <linux/pci.h>
 #include <linux/types.h>
 #include <linux/iopoll.h>
+#include <linux/iopoll.h>
+#include <linux/bitfield.h>
 
 #include <media/v4l2-ctrls.h>
 
@@ -11,7 +13,7 @@
 #include "hws_video.h"
 #include "hws_v4l2_ioctl.h"
 
-#define DRV_NAME "HWS driver"
+#define DRV_NAME "hws"
 #define HWS_REG_DEVICE_INFO   0x0000
 #define HWS_REG_DEC_MODE      0x0004
 #define HWS_BUSY_POLL_DELAY_US   10
@@ -153,17 +155,14 @@ static int read_chip_id(struct hws_pcie_dev *hdev)
 
 static int hws_video_init_channel(struct hws_pcie_dev *dev, int idx);
 static int hws_audio_init_channel(struct hws_pcie_dev *dev, int idx);
-static int hws_irq_setup(struct hws_pcie_dev *hws);
-static struct hws_pcie_dev *hws_alloc_dev_instance(struct pci_dev *pdev);
 static void hws_audio_cleanup_channel(struct hws_pcie_dev *pdev, int ch);
-static int probe_scan_for_msi(struct hws_pcie_dev *hws, struct pci_dev *pdev);
-static void hws_disable_msi(struct hws_pcie_dev *hws_dev);
 static void hws_video_cleanup_channel(struct hws_pcie_dev *pdev, int ch);
 static void hws_remove(struct pci_dev *pdev);
 
-#ifndef arch_msi_check_device
-int arch_msi_check_device(struct pci_dev *dev, int nvec, int type);
-#endif
+static void hws_free_irq_vectors_action(void *data)
+{
+	pci_free_irq_vectors((struct pci_dev *)data);
+}
 
 static int main_ks_thread_handle(void *data)
 {
@@ -194,153 +193,138 @@ static int main_ks_thread_handle(void *data)
     return 0;
 }
 
+static void hws_stop_kthread_action(void *data)
+{
+	struct task_struct *t = data;
+	if (!IS_ERR_OR_NULL(t))
+		kthread_stop(t);
+}
 
-/*
- * alloc_dev → 
- * request_regions → 
- * ioremap → 
- * MSI scan / IRQ setup → 
- * chip-id + channel init → 
- * helper kthread → 
- * V4L2 / ALSA registration
- */
+
 static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id)
 {
-	struct hws_pcie_dev *hws_dev;
-	int ret = -ENODEV;
-	int j, i;
+	struct hws_pcie_dev *hws;
+	void __iomem *bar0;
+	int i, ret, nvec, irq;
 
-	hws_dev = hws_alloc_dev_instance(pci_dev);
-
-	if (!hws_dev) {
-		dev_err(&pci_dev->dev, "%s: out of memory\n", __func__);
+	/* devres-backed device object */
+	hws = devm_kzalloc(&pdev->dev, sizeof(*hws), GFP_KERNEL);
+	if (!hws)
 		return -ENOMEM;
-	}
-	hws_dev->bar0_base = NULL;
 
-	hws_dev->pdev = pci_dev;
+	hws->pdev = pdev;
+	pci_set_drvdata(pdev, hws);
+
+	/* 1) Managed enable + bus mastering */
+	ret = pcim_enable_device(pdev);
+	if (ret)
+		return dev_err_probe(&pdev->dev, ret, "pcim_enable_device\n");
+
+	pci_set_master(pdev);
+
+	/* 2) Map BAR0 with PCIM (auto request_regions + iounmap on detach) */
+	bar0 = pcim_iomap_region(pdev, 0, KBUILD_MODNAME);
+	if (IS_ERR(bar0))
+		return dev_err_probe(&pdev->dev, PTR_ERR(bar0),
+				     "pcim_iomap_region(BAR0)\n");
+	hws->bar0_base = bar0;
+
+	/* 3) DMA mask (try 64-bit, fall back to 32-bit) */
+	if (dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64))) {
+		ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
+		if (ret)
+			return dev_err_probe(&pdev->dev, ret,
+					     "No suitable DMA mask\n");
+	}
+
+	/* 4) Relaxed Ordering, ReadRQ, etc. if you need them */
+	enable_pcie_relaxed_ordering(pdev);
+#ifdef CONFIG_ARCH_TI816X
+	pcie_set_readrq(pdev, 128);
+#endif
+
+	/* 5) Identify chip & set capabilities */
+	read_chip_id(hws_dev);
 
 	hws_dev->device_id = hws_dev->pdev->device;
 	hws_dev->vendor_id = hws_dev->pdev->vendor;
 	dev_info(&pci_dev->dev, "Device VID=0x%04x, DID=0x%04x\n",
 		 pci_dev->vendor, pci_dev->device);
 
-	// chatgpt recommends pci_enable_device_mem?
-	ret = pci_enable_device(pci_dev);
+	/* 6) Init channels (explicit unwind on failure is fine here) */
+	for (i = 0; i < hws->max_channels; i++) {
+		ret = hws_video_init_channel(hws, i);
+		if (ret)
+			goto err_unwind_channels;
+		ret = hws_audio_init_channel(hws, i);
+		if (ret)
+			goto err_unwind_channels;
+	}
+
+	/* 8) Allocate IRQ vector(s) the modern way; free via devm action */
+	nvec = pci_alloc_irq_vectors(pdev, 1, 1,
+		PCI_IRQ_ALL_TYPES | PCI_IRQ_AFFINITY);
+	if (nvec < 0) {
+		ret = nvec;
+		dev_err(&pdev->dev, "pci_alloc_irq_vectors: %d\n", ret);
+		goto err_unwind_channels;
+	}
+	ret = devm_add_action_or_reset(&pdev->dev,
+				       hws_free_irq_vectors_action, pdev);
 	if (ret) {
-		dev_err(&pci_dev->dev, "%s: pci_enable_device failed: %d\n",
-			__func__, ret);
-		goto err_free_dev;
+		dev_err(&pdev->dev, "devm_add_action: free_irq_vectors: %d\n", ret);
+		goto err_unwind_channels; /* add_action already called reset */
 	}
 
-    ret = pci_request_regions(pci_dev, DRV_NAME);
-    if (ret) {
-        dev_err(&pci_dev->dev, "pci_request_regions failed: %d\n", ret);
-        goto err_disable_device;
-    }
-
-    pci_set_drvdata(pci_dev, hws_dev);
-
-    /* map BAR0 via the PCI core: */
-    hws_dev->bar0_base = pci_iomap(pci_dev, 0,
-                                pci_resource_len(pci_dev, 0));
-    if (!hws_dev->bar0_base) {
-        dev_err(&pci_dev->dev, "pci_iomap failed\n");
-        ret = -ENOMEM;
-        goto err_release_regions;
-    }
-
-
-	enable_pcie_relaxed_ordering(pci_dev);
-	pci_set_master(pci_dev);
-
-#ifdef CONFIG_ARCH_TI816X
-	pcie_set_readrq(pci_dev, 128);
-#endif
-
-	read_chip_id(hws_dev);
-    /* Initialize each video/audio channel */
-    for (i = 0; i < hws_dev->max_channels; i++) {
-	// FIXME: Fields have changed
-        ret = hws_video_init_channel(hws_dev, i);
-        if (ret)
-            goto err_cleanup_channels;
-
-	// FIXME: Fields have changed
-        ret = hws_audio_init_channel(hws_dev, i);
-        if (ret)
-            goto err_cleanup_channels;
-    }
-
-	// FIXME: making changes in DMA register setting
-	hws_init_video_sys(hws_dev, 0);
-
-    // NOTE: there are two loops, need to check if the interrupt loop can see if the capture is running and signal 
-    // is lost. This was what it was: `video_data_process` where there were periodic checks
-    // that we can see no video. `main_ks_thread_handle` calls `check_video_format` calls get_video_status`
-   
-    // FIXME: figure out if we can check update_hpd_status early and exit fast
-    hws_dev->main_task = kthread_run(main_ks_thread_handle, (void *)hws_dev, "start_ks_thread_task");
-    if (IS_ERR(hws_dev->main_task)) {
-            ret = PTR_ERR(hws_dev->main_task);
-            hws_dev->main_task = NULL;
-            goto err_cleanup_channels;
-    }
-
-	ret = probe_scan_for_msi(hws_dev, pci_dev);
-
-	if (ret < 0) {
-        dev_err(&pci_dev->dev, "%s: MSI setup failed: %d\n",
-                __func__, ret);
-		goto err_free_irq;
-	}
-
-	// FIXME: Clear/ack any pending bits in the device before requesting irq and enabling MSI
-	ret = hws_irq_setup(hws_dev);
+	irq = pci_irq_vector(pdev, 0);
+	ret = devm_request_irq(&pdev->dev, irq, irqhandler, 0,
+			       dev_name(&pdev->dev), hws);
 	if (ret) {
-        dev_err(&pci_dev->dev, "%s: IRQ setup failed: %d\n",
-                __func__, ret);
-		goto err_free_irq;
+		dev_err(&pdev->dev, "request_irq(%d): %d\n", irq, ret);
+		goto err_unwind_channels;
 	}
 
+	/* 10) Register V4L2/ALSA */
+	ret = hws_video_register(hws);
+	if (ret) {
+		dev_err(&pdev->dev, "video_register: %d\n", ret);
+		goto err_unwind_channels;
+	}
+	ret = hws_audio_register(hws);
+	if (ret) {
+		dev_err(&pdev->dev, "audio_register: %d\n", ret);
+		hws_video_unregister(hws);
+		goto err_unwind_channels;
+	}
 
-	// FIXME: figure out if this hardware only supports 4 GB RAM
-	if (hws_video_register(hws_dev))
-		goto err_free_irq;
+	/* 11) Background monitor thread (managed stop via devm action) */
+	hws->main_task = kthread_run(main_ks_thread_handle, hws, "hws-mon");
+	if (IS_ERR(hws->main_task)) {
+		ret = PTR_ERR(hws->main_task);
+		hws->main_task = NULL;
+		dev_err(&pdev->dev, "kthread_run: %d\n", ret);
+		goto err_unregister_va;
+	}
+	ret = devm_add_action_or_reset(&pdev->dev,
+				       hws_stop_kthread_action, hws->main_task);
+	if (ret) {
+		dev_err(&pdev->dev, "devm_add_action: kthread_stop: %d\n", ret);
+		goto err_unregister_va; /* reset already stopped the thread */
+	}
 
-    // FIXME: `audio_data_process` which gets set/called from this func sucks
-    // this is where the audio devices get created, if we need to set the DMA address for the 
-    // it would be a good point to check here
-	if (hws_audio_register(hws_dev))
-		goto err_unregister_video;
 	return 0;
 
-err_unregister_video:
-	hws_video_unregister(hws_dev);
-err_free_irq:
-    hws_disable_msi(hws_dev);
-    /* devm_free_irq() is implicit */
-err_stop_thread:
-        if (!IS_ERR_OR_NULL(hws_dev->main_task))
-                kthread_stop(hws_dev->main_task);
-err_free_dma:
-err_cleanup_channels:
-    /* undo channels [0 .. i-1] */
-    for (j = i - 1; j >= 0; j--) {
-        hws_video_cleanup_channel(hws_dev, j);
-	hws_audio_cleanup_channel(hws_dev, j);
-    }
-err_unmap_bar:
-        if (hws_dev->bar0_base) {          /* mapped → unmap & NULL it     */
-                pci_iounmap(pci_dev, hws_dev->bar0_base);
-                hws_dev->bar0_base = NULL;
-        }
-err_release_regions:
-        pci_release_regions(pci_dev);
-err_disable_device:
-        pci_disable_device(pci_dev);
-err_free_dev:
-        return ret;
+err_unregister_va:
+	hws_stop_device(hws);
+	hws_audio_unregister(hws);
+	hws_video_unregister(hws);
+err_unwind_channels:
+	/* explicit per-channel teardown for any initted channels */
+	while (--i >= 0) {
+		hws_video_cleanup_channel(hws, i);
+		hws_audio_cleanup_channel(hws, i);
+	}
+	return ret;
 }
 
 static int hws_check_busy(struct hws_pcie_dev *pdx)
@@ -414,44 +398,25 @@ static void hws_stop_device(struct hws_pcie_dev *hws)
 
 static void hws_remove(struct pci_dev *pdev)
 {
-    struct hws_pcie_dev *hdev = pci_get_drvdata(pdev);
-    struct video_device *vdev;
+    struct hws_pcie_dev *hws = pci_get_drvdata(pdev);
     int i;
-    if (!hdev || !hdev->bar0_base)
+
+    if (!hws)
         return;
 
-	if (hdev->main_task) {
-		kthread_stop(hdev->main_task);
-	}
+    /* Stop hardware / capture cleanly (your helper) */
+    hws_stop_device(hws);
 
-	hws_stop_device(hdev);
-	/* disable interrupts */
-	// hws_free_irqs(hdev);
+    /* Unregister subsystems you registered */
+    hws_audio_unregister(hws);
+    hws_video_unregister(hws);
 
-	for (i = 0; i < hdev->cur_max_video_ch; i++) {
-		if (hdev->audio[i].sound_card) {
-			snd_card_free(hdev->audio[i].sound_card);
-			hdev->audio[i].sound_card = NULL;
-		}
-	}
-
-	for (i = 0; i < hdev->cur_max_video_ch; i++) {
-		vdev = hdev->video[i].video_device;
-		video_unregister_device(vdev);
-		// FIXME: need to understand if we're cleaning this up correctly
-		// v4l2_device_unregister(&hdev->video[i].video_device);
-		v4l2_ctrl_handler_free(&hdev->video[i].control_handler);
-	}
-
-	if (hdev->msix_enabled) {
-		pci_disable_msix(pdev);
-		hdev->msix_enabled = 0;
-	} else if (hdev->msi_enabled) {
-		pci_disable_msi(pdev);
-		hdev->msi_enabled = 0;
-	}
-	pci_disable_device(pdev);
-	pci_set_drvdata(pdev, NULL);
+    /* Per-channel teardown */
+    for (i = 0; i < hws->max_channels; i++) {
+        hws_video_cleanup_channel(hws, i);
+        hws_audio_cleanup_channel(hws, i);
+    }
+    /* kthread is stopped by the devm action you added in probe */
 }
 
 /* ─────────────────────────────────────────────────────────── */
@@ -665,162 +630,7 @@ static void hws_audio_cleanup_channel(struct hws_pcie_dev *pdev, int ch)
 
 	/* format defaults (rate/ch/bits) can be left as-is or reset if you prefer */
 }
-}
 
-static struct hws_pcie_dev *hws_alloc_dev_instance(struct pci_dev *pdev)
-{
-    struct hws_pcie_dev *lro;
-
-    if (WARN_ON(!pdev))
-        return ERR_PTR(-EINVAL);
-
-    lro = devm_kzalloc(&pdev->dev, sizeof(*lro), GFP_KERNEL);
-    if (!lro) {
-        dev_err(&pdev->dev, "failed to alloc hws_pcie_dev\n");
-        return ERR_PTR(-ENOMEM);
-    }
-
-    /* no IRQ yet */
-    lro->irq_line = -1;
-
-    dev_set_drvdata(&pdev->dev, lro);
-    lro->pdev = pdev;
-
-
-    return lro;
-}
-
-/* type = PCI_CAP_ID_MSI or PCI_CAP_ID_MSIX */
-int msi_msix_capable(struct pci_dev *dev, int type)
-{
-	struct pci_bus *bus;
-	int ret;
-	//printk("msi_msix_capable in \n");
-	if (!dev || dev->no_msi) {
-		printk("msi_msix_capable no_msi exit \n");
-		return 0;
-	}
-
-	for (bus = dev->bus; bus; bus = bus->parent) {
-		if (bus->bus_flags & PCI_BUS_FLAGS_NO_MSI) {
-			printk("msi_msix_capable PCI_BUS_FLAGS_NO_MSI \n");
-			return 0;
-		}
-	}
-	ret = arch_msi_check_device(dev, 1, type);
-	if (ret) {
-		return 0;
-	}
-	ret = pci_find_capability(dev, type);
-	if (!ret) {
-		printk("msi_msix_capable pci_find_capability =%d\n", ret);
-		return 0;
-	}
-
-	return 1;
-}
-
-static int probe_scan_for_msi(struct hws_pcie_dev *hws, struct pci_dev *pdev)
-{
-    int rc, nvec;
-
-    if (WARN_ON(!hws || !pdev))
-        return -EINVAL;
-
-#ifdef CONFIG_PCI_IRQ_VECTOR
-    /* 1) Try to allocate MSI-X vectors */
-    if (pci_find_capability(pdev, PCI_CAP_ID_MSIX)) {
-        nvec = ARRAY_SIZE(hws->msix_entries);
-        rc = pci_alloc_irq_vectors(pdev, nvec, nvec, PCI_IRQ_MSIX);
-        if (rc == nvec) {
-            hws->msix_enabled = true;
-            hws->msi_enabled  = false;
-            dev_info(&pdev->dev, "MSI-X x%d enabled\n", nvec);
-            return 0;
-        }
-        dev_err(&pdev->dev,
-                "MSI-X x%d allocation failed (%d), falling back\n",
-                nvec, rc);
-    }
-
-    /* 2) Try to allocate a single MSI vector */
-    if (pci_find_capability(pdev, PCI_CAP_ID_MSI)) {
-        rc = pci_alloc_irq_vectors(pdev, 1, 1, PCI_IRQ_MSI);
-        if (rc == 1) {
-            hws->msi_enabled  = true;
-            hws->msix_enabled = false;
-            dev_info(&pdev->dev, "MSI x1 enabled\n");
-            return 0;
-        }
-        dev_err(&pdev->dev,
-                "MSI x1 allocation failed (%d), falling back\n",
-                rc);
-    }
-#endif
-
-    /* 3) Legacy INTx */
-    hws->msi_enabled  = false;
-    hws->msix_enabled = false;
-    dev_info(&pdev->dev, "using legacy INTx interrupts\n");
-    return 0;
-}
-
-static void hws_disable_msi(struct hws_pcie_dev *hws_dev)
-{
-    /* only free if we actually enabled MSI‑X or MSI */
-    if (hws_dev->msix_enabled || hws_dev->msi_enabled) {
-        pci_free_irq_vectors(hws_dev->pdev);
-        hws_dev->msix_enabled = false;
-        hws_dev->msi_enabled  = false;
-    }
-}
-
-static int hws_irq_setup(struct hws_pcie_dev *hws)
-{
-    struct pci_dev *pdev = hws->pdev;
-    int irq, rc;
-    unsigned long flags = 0;
-
-    if (WARN_ON(!hws || !pdev))
-        return -EINVAL;
-
-    /*
-     * If neither MSI nor MSI-X got enabled in probe(), we’re stuck on
-     * legacy INTx—mark it shared and log the pin/line.
-     */
-    if (!hws->msi_enabled && !hws->msix_enabled) {
-        u8 pin;
-
-        pci_read_config_byte(pdev, PCI_INTERRUPT_PIN, &pin);
-        dev_info(&pdev->dev,
-                 "no MSI/MSI-X; using legacy INTx (pin %u, line %d)\n",
-                 pin, pdev->irq);
-        flags |= IRQF_SHARED;
-    }
-
-    /* Get the vector we allocated in probe_scan_for_msi() */
-    irq = pci_irq_vector(pdev, 0);
-    if (irq < 0) {
-        dev_err(&pdev->dev,
-                "pci_irq_vector() failed: %d\n", irq);
-        return irq;
-    }
-
-    rc = devm_request_irq(&pdev->dev, irq, irqhandler,
-                          flags, dev_name(&pdev->dev), hws);
-    if (rc) {
-        dev_err(&pdev->dev,
-                "devm_request_irq(%d) failed: %d\n", irq, rc);
-        return rc;
-    }
-
-    hws->irq_line = irq;
-    dev_info(&pdev->dev,
-             "IRQ %d registered (msi=%u)\n",
-             irq, hws->msi_enabled);
-
-    return 0;
-}
 
 static struct pci_driver hws_pci_driver = {
 	.name = KBUILD_MODNAME,
