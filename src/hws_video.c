@@ -1,10 +1,11 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include <linux/pci.h>
 #include <linux/kernel.h>
+#include <linux/overflow.h>
+#include <media/videobuf2-v4l2.h>
+
 #include <media/videobuf2-core.h>
 #include <media/v4l2-device.h>
-#include <media/videobuf2-dma-contig.h>
-#include <media/videobuf2-vmalloc.h>
 #include <media/videobuf2-dma-contig.h>
 #include "hws.h"
 #include "hws_reg.h"
@@ -289,7 +290,7 @@ void hws_init_video_sys(struct hws_pcie_dev *hws, bool enable)
         return;
 
     /* 1) reset the decoder mode register to 0 */
-    writel(0x00000000, hdev->bar0_base + HWS_REG_DEC_MODE);
+    writel(0x00000000, hws->bar0_base + HWS_REG_DEC_MODE);
 
     // FIXME: remove, once the device has been created, on stream_on it should point the DMA address
     // correctly to the vb2 buffer. The legacy behavior was to allocate to the driver owned buffer
@@ -503,8 +504,7 @@ int get_video_status(struct hws_pcie_dev *pdx, unsigned int ch)
 static ssize_t hws_read(struct file *file, char *buf, size_t count,
 			loff_t *ppos)
 {
-	//printk( "%s()\n", __func__);
-	return -1;
+    return -ENOSYS;
 }
 
 static int hws_open(struct file *file)
@@ -701,125 +701,155 @@ static const struct vb2_ops hwspcie_video_qops = {
 
 int hws_video_register(struct hws_pcie_dev *dev)
 {
-	int i, err;
-	struct video_device *vdev;
-	struct vb2_queue *q;
+	int i, ret;
 
-	err = devm_v4l2_device_register(&dev->pdev->dev, &dev->v4l2_dev);
-	if (err) {
-		dev_err(&dev->pdev->dev,
-			"v4l2_device_register failed: %d\n", err);
-		return err;
+	ret = devm_v4l2_device_register(&dev->pdev->dev, &dev->v4l2_device);
+	if (ret) {
+		dev_err(&dev->pdev->dev, "v4l2_device_register failed: %d\n", ret);
+		return ret;
 	}
 
 	for (i = 0; i < dev->cur_max_video_ch; i++) {
-		struct hws_video *hws = &dev->video[i];
+		struct hws_video *ch = &dev->video[i];
+		struct video_device *vdev;
+		struct vb2_queue *q;
 
-		/* init channel state */
-		hws->channel_index      = i;
-		hws->parent             = dev;
-		hws->pixel_format       = V4L2_PIX_FMT_YUYV;
-		hws->current_brightness = BrightnessDefault;
-		hws->current_contrast   = ContrastDefault;
-		hws->current_saturation = SaturationDefault;
-		hws->current_hue        = HueDefault;
+		/* hws_video_init_channel() should have set:
+		 * - ch->parent, ch->channel_index
+		 * - locks (state_lock, irq_lock)
+		 * - capture_queue (INIT_LIST_HEAD)
+		 * - control_handler + controls
+		 * - fmt_curr (width/height)
+		 * Don’t reinitialize any of those here.
+		 */
 
-		/* initialise locks & lists */
-		mutex_init(&hws->state_lock);
-		mutex_init(&hws->capture_queue_lock);
-		spin_lock_init(&hws->irq_lock);
-		INIT_LIST_HEAD(&hws->capture_queue);
-
-		/* setup video_device */
 		vdev = devm_video_device_alloc(&dev->pdev->dev, 0);
 		if (!vdev) {
-		    dev_err(&dev->pdev->dev, "video_device_alloc failed\n");
-		    err = -ENOMEM;
-		    goto err_unreg_nodes;
+			dev_err(&dev->pdev->dev, "video_device_alloc ch%u failed\n", i);
+			ret = -ENOMEM;
+			goto err_unwind;
 		}
-		hws->vdev = vdev;
+		ch->video_device = vdev;
 
-		vdev->v4l2_dev     = &dev->v4l2_dev;
-		vdev->fops         = &hws_fops;
-		vdev->ioctl_ops    = &hws_ioctl_fops;
+		/* Basic V4L2 node setup */
+		snprintf(vdev->name, sizeof(vdev->name), "%s-hdmi%u", KBUILD_MODNAME, i);
+		vdev->v4l2_dev     = &dev->v4l2_device;
+		vdev->fops         = &hws_fops;          /* your file_ops */
+		vdev->ioctl_ops    = &hws_ioctl_fops;    /* your ioctl_ops */
 		vdev->device_caps  = V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_STREAMING;
-		vdev->lock         = &hws->state_lock;
-		vdev->ctrl_handler = &hws->control_handler;
+		vdev->lock         = &ch->state_lock;    /* serialize file ops */
+		vdev->ctrl_handler = &ch->control_handler;
 		vdev->vfl_dir      = VFL_DIR_RX;
 		vdev->release      = video_device_release_empty;
-		video_set_drvdata(vdev, hws);
-		video_device_set_name(vdev, "%s-hdmi%d",
-				      KBUILD_MODNAME, i);
+		video_set_drvdata(vdev, ch);
 
-		/* Setup vb2 queue with designated initializer */
-		q = &hws->buffer_queue;
+		/* vb2 queue init (dma-contig) */
+		q = &ch->buffer_queue;
+		memset(q, 0, sizeof(*q));
+		q->type            = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+		q->io_modes        = VB2_MMAP | VB2_DMABUF;
+		q->drv_priv        = ch;
+		q->buf_struct_size = sizeof(struct hwsvideo_buffer);
+		q->ops             = &hwspcie_video_qops;      /* your vb2_ops */
+		q->mem_ops         = &vb2_dma_contig_memops;
+		q->timestamp_flags = V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC;
+		q->lock            = &ch->state_lock;          /* reuse state_lock */
+		q->dev             = &dev->pdev->dev;
 
-		// FIXME: Figure out if the hw only supports 4 GB RAM
-		*q = (struct vb2_queue) {
-			.type            = V4L2_BUF_TYPE_VIDEO_CAPTURE,
-			.io_modes        = VB2_READ | VB2_MMAP | VB2_USERPTR,
-			.gfp_flags       = GFP_DMA32,
-			.drv_priv        = hws,
-			.buf_struct_size = sizeof(struct hwsvideo_buffer),
-			.ops             = &hwspcie_video_qops,
-			.mem_ops         = &vb2_vmalloc_memops,
-			.timestamp_flags = V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC,
-			.lock            = &hws->capture_queue_lock,
-			.dev             = &dev->pdev->dev,
-		};
-
-		vdev->queue = q;
-
-		err = vb2_queue_init(q);
-		if (err) {
-			dev_err(&dev->pdev->dev,
-				"vb2_queue_init(ch%d) failed: %d\n", i, err);
-			goto err_unreg_nodes;
+		ret = vb2_queue_init(q);
+		if (ret) {
+			dev_err(&dev->pdev->dev, "vb2_queue_init ch%u failed: %d\n", i, ret);
+			goto err_unwind;
 		}
 
-		INIT_WORK(&hws->video_work, video_data_process);
-		err = video_register_device(vdev, VFL_TYPE_VIDEO, -1);
-		if (err) {
+		/* Make controls live (no-op if none or already set up) */
+		if (ch->control_handler.error) {
+			ret = ch->control_handler.error;
+			dev_err(&dev->pdev->dev, "ctrl handler ch%u error: %d\n", i, ret);
+			goto err_unwind;
+		}
+		v4l2_ctrl_handler_setup(&ch->control_handler);
+
+		ret = video_register_device(vdev, VFL_TYPE_VIDEO, -1);
+		if (ret) {
 			dev_err(&dev->pdev->dev,
-				"video_register_device(ch%d) failed: %d\n",
-				i, err);
-			goto err_unreg_nodes;
+				"video_register_device ch%u failed: %d\n", i, ret);
+			goto err_unwind;
 		}
 	}
 
 	return 0;
-err_unreg_nodes:
-    while (--i >= 0) {
-        struct hws_video *hws = &dev->video[i];
-        vb2_queue_cleanup(&hws->buffer_queue);
-        video_unregister_device(hws->vdev);
-    }
-    return err;
+
+err_unwind:
+	/* Undo channels [0 .. i] that were successfully set up */
+	while (--i >= 0) {
+		struct hws_video *ch = &dev->video[i];
+
+		if (video_is_registered(ch->video_device))
+			video_unregister_device(ch->video_device);
+
+		/* vb2 teardown (safe to call if vb2_queue_init succeeded) */
+		if (ch->buffer_queue.ops)
+			vb2_queue_release(&ch->buffer_queue);
+
+		ch->video_device = NULL;
+	}
+	return ret;
 }
 
 void hws_video_unregister(struct hws_pcie_dev *dev)
 {
-    int i;
+	int i;
 
-    /* For each channel, in reverse order of registration: */
-    for (i = 0; i < dev->cur_max_video_ch; i++) {
-        struct hws_video *hws = &dev->video[i];
+	if (!dev)
+		return;
 
-        /* 1) Stop any pending work */
-        cancel_work_sync(&hws->video_work);
+	for (i = 0; i < dev->cur_max_video_ch; i++) {
+		struct hws_video *ch = &dev->video[i];
+		unsigned long flags;
 
-        /* 2) Unregister the V4L2 video device;
-         *    this also calls ->release and frees the struct video_device
-         *    that was allocated via devm_video_device_alloc().
-         */
-        video_unregister_device(hws->vdev);
+		/* 1) Stop hardware capture for this channel (if running). */
+		if (ch->cap_active)
+			hws_enable_video_capture(dev, i, false);
 
-        /* 3) Clean up the vb2 queue buffers and any vmalloc’d buffers. */
-        vb2_queue_cleanup(&hws->buffer_queue);
-    }
+		/* 2) Drain SW queue + complete in-flight buffer as ERROR. */
+		spin_lock_irqsave(&ch->irq_lock, flags);
 
-    /* Note: devm_v4l2_device_register() is managed by the device,
-     * so you don’t need to explicitly unregister it here.
-     */
+		if (ch->cur) {
+			vb2_buffer_done(&ch->cur->vb.vb2_buf, VB2_BUF_STATE_ERROR);
+			ch->cur = NULL;
+		}
+		while (!list_empty(&ch->capture_queue)) {
+			struct hwsvideo_buffer *b =
+				list_first_entry(&ch->capture_queue,
+						 struct hwsvideo_buffer, queue);
+			list_del(&b->queue);
+			vb2_buffer_done(&b->vb.vb2_buf, VB2_BUF_STATE_ERROR);
+		}
+
+		spin_unlock_irqrestore(&ch->irq_lock, flags);
+
+		/* 3) Release vb2 queue (safe to call once if it was inited). */
+		if (ch->buffer_queue.ops)
+			vb2_queue_release(&ch->buffer_queue);
+
+		/* 4) Free V4L2 controls. */
+		v4l2_ctrl_handler_free(&ch->control_handler);
+
+		/* 5) Unregister the video node (if it was registered). */
+		if (ch->video_device) {
+			if (video_is_registered(ch->video_device))
+				video_unregister_device(ch->video_device);
+			ch->video_device = NULL;
+		}
+
+		/* 6) Reset lightweight state (optional). */
+		ch->cap_active      = false;
+		ch->stop_requested  = false;
+		ch->last_buf_half_toggle = 0;
+		ch->half_seen       = false;
+		ch->signal_loss_cnt = 0;
+		INIT_LIST_HEAD(&ch->capture_queue);
+	}
 }
 
