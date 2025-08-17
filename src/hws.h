@@ -199,11 +199,11 @@ struct hwsvideo_buffer {
 struct hws_video {
 	/* ───── linkage ───── */
 	struct hws_pcie_dev		*parent;		/* parent device */
-
 	struct video_device		 *video_device;
+
 	struct vb2_queue			 buffer_queue;
 	struct list_head			 capture_queue;
-	struct hwsvideo_buffer *cur; // the in-flight VB2 buffer
+	struct hwsvideo_buffer *active;
 
 
 	/* ───── locking ───── */
@@ -214,7 +214,7 @@ struct hws_video {
 	int						 channel_index;
 
 	/* ───── async helpers ───── */
-	struct tasklet_struct  video_bottom_half;
+	struct tasklet_struct  bh_tasklet;
 
 	/* ───── colour controls ───── */
 	int						 current_brightness;
@@ -235,6 +235,7 @@ struct hws_video {
 	bool                     stop_requested;	/* was video_stop        */
 	u8                      last_buf_half_toggle;
 	bool half_seen; // if your HW uses two half-frame toggles
+    u32  sequence_number;
 
 	/* ───── misc counters ───── */
 	int						 signal_loss_cnt;	/* no-video counter      */

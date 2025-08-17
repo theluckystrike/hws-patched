@@ -35,33 +35,40 @@ static inline struct hwsvideo_buffer *to_hwsbuf(struct vb2_buffer *vb)
 	return container_of(to_vb2_v4l2_buffer(vb), struct hwsvideo_buffer, vb);
 }
 
-// FIXME: use correctly, should be in ipc
 static void hws_program_video_from_vb2(struct hws_pcie_dev *hws,
                                        unsigned int ch,
                                        struct vb2_buffer *vb)
 {
-    const u32 addr_mask     = PCI_E_BAR_ADD_MASK;
-    const u32 addr_low_mask = PCI_E_BAR_ADD_LOWMASK;
-    const u32 table_off     = 0x208 + ch * 8;   /* one 64-bit slot per ch */
+	const u32 addr_mask     = PCI_E_BAR_ADD_MASK;
+	const u32 addr_low_mask = PCI_E_BAR_ADD_LOWMASK;
+	const u32 table_off     = 0x208 + ch * 8; /* one 64-bit slot per ch */
 
-    dma_addr_t paddr = vb2_dma_contig_plane_dma_addr(vb, 0);
-    u32 lo = lower_32_bits(paddr);
-    u32 hi = upper_32_bits(paddr);
-    u32 pci_addr = lo & addr_low_mask;
-    lo &= addr_mask;
+	dma_addr_t paddr = vb2_dma_contig_plane_dma_addr(vb, 0);
+	u32 lo = lower_32_bits(paddr);
+	u32 hi = upper_32_bits(paddr);
+	u32 pci_addr = lo & addr_low_mask;
 
-    /* 64-bit BAR remap entry for this channel */
-    writel(hi, hws->bar0_base + PCI_ADDR_TABLE_BASE + table_off);
-    writel(lo, hws->bar0_base + PCI_ADDR_TABLE_BASE + table_off + PCIE_BARADDROFSIZE);
+	lo &= addr_mask;
 
-    /* Capture engine per-channel registers */
-    writel((ch + 1) * PCIEBAR_AXI_BASE + pci_addr,
-           hws->bar0_base + CBVS_IN_BUF_BASE  + ch * PCIE_BARADDROFSIZE);
+	/* Program 64-bit BAR remap entry for this channel */
+	writel_relaxed(hi, hws->bar0_base + PCI_ADDR_TABLE_BASE + table_off);
+	writel_relaxed(lo, hws->bar0_base + PCI_ADDR_TABLE_BASE +
+	                              table_off + PCIE_BARADDROFSIZE);
 
-    /* If your HW still uses half-buffer toggling, keep programming half_size */
-    writel(hws->video[ch].fmt_curr.half_size / 16,
-           hws->bar0_base + CBVS_IN_BUF_BASE2 + ch * PCIE_BARADDROFSIZE);
+	/* Program capture engine per-channel base/size */
+	writel_relaxed((ch + 1) * PCIEBAR_AXI_BASE + pci_addr,
+		       hws->bar0_base + CBVS_IN_BUF_BASE +
+		                      ch * PCIE_BARADDROFSIZE);
+
+	/* If HW uses half-buffer toggling, program half_size (device-specific) */
+	writel_relaxed(hws->video[ch].fmt_curr.half_size / 16,
+		       hws->bar0_base + CBVS_IN_BUF_BASE2 +
+		                      ch * PCIE_BARADDROFSIZE);
+
+	/* Ensure above posted writes reach the device before capture starts */
+	readl(hws->bar0_base + HWS_REG_INT_STATUS);
 }
+
 
 static inline u32 hws_read_port_hpd(struct hws_pcie_dev *hws, unsigned int port)
 {
@@ -601,85 +608,93 @@ static void hws_buffer_queue(struct vb2_buffer *vb)
 
 static int hws_start_streaming(struct vb2_queue *q, unsigned int count)
 {
-	struct hws_video *vid = q->drv_priv;
-	struct hws_pcie_dev *hws = vid->parent;
-	int ret, en;
+	struct hws_video *v = q->drv_priv;
+	struct hws_pcie_dev *hws = v->parent;
 	unsigned long flags;
+	int en, ret;
 
-	/* 1) Make sure the card is alive and the core is initialized */
+	/* 1) Card/device sanity */
 	ret = hws_check_card_status(hws);
 	if (ret)
 		return ret;
 
-	/* 2) If we think the channel is active, verify HW; re-enable if needed */
-	if (READ_ONCE(vid->cap_active)) {
-		en = check_video_capture(hws, vid->channel_index);
-		if (en < 0)
-			return en;
-		if (en == 0)
-			hws_enable_video_capture(hws, vid->channel_index, true);
-	}
-
-	/* 3) Must have at least one queued buffer to start */
-	spin_lock_irqsave(&vid->irq_lock, flags);
-	if (list_empty(&vid->capture_queue)) {
-		spin_unlock_irqrestore(&vid->irq_lock, flags);
+	/* 2) Must have at least one queued buffer to start */
+	spin_lock_irqsave(&v->irq_lock, flags);
+	if (list_empty(&v->capture_queue)) {
+		spin_unlock_irqrestore(&v->irq_lock, flags);
 		return -ENOSPC;
 	}
 
-	vid->stop_requested        = false;
-	vid->last_buf_half_toggle  = 0;
-	vid->half_seen             = false;
+	/* (Re)init per-stream state visible to IRQ/BH */
+	WRITE_ONCE(v->stop_requested, false);
+	WRITE_ONCE(v->last_buf_half_toggle, 0);
+	v->half_seen = false;
 
-	/* 4) Prime first buffer if nothing in-flight */
-	if (!vid->cur) {
-		vid->cur = list_first_entry(&vid->capture_queue,
-					    struct hwsvideo_buffer, queue);
-		list_del(&vid->cur->queue);
+	/* 3) Prime first buffer if nothing in-flight */
+	if (!v->active) {
+		struct hwsvideo_buffer *first;
+		first = list_first_entry(&v->capture_queue,
+					 struct hwsvideo_buffer, list);
+		list_del(&first->list);
+		v->active = first;
 
-		hws_program_video_from_vb2(hws, vid->channel_index,
-					   &vid->cur->vb.vb2_buf);
+		/* Make sure any CPU writes (if any) are visible before doorbell */
+		wmb();
+		hws_program_video_from_vb2(hws, v->channel_index,
+					   &first->vb.vb2_buf);
 	}
+	spin_unlock_irqrestore(&v->irq_lock, flags);
 
-	/* 5) Ensure HW capture is actually enabled for this channel */
-	en = check_video_capture(hws, vid->channel_index);
-	if (en <= 0) {
-		if (en < 0) {
-			spin_unlock_irqrestore(&vid->irq_lock, flags);
-			return en; /* device error */
-		}
-		hws_enable_video_capture(hws, vid->channel_index, true);
-	}
+	/* 4) Ensure HW capture is enabled for this channel.
+	 *    Do this after programming the buffer; flush posted writes first.
+	 */
+	(void)readl(hws->bar0_base + HWS_REG_INT_STATUS); /* flush PCI writes */
 
-	vid->cap_active = true;
-	spin_unlock_irqrestore(&vid->irq_lock, flags);
+	en = check_video_capture(hws, v->channel_index);
+	if (en < 0)
+		return en;
+	if (en == 0)
+		hws_enable_video_capture(hws, v->channel_index, true);
+
+	/* 5) Publish running state */
+	mutex_lock(&v->state_lock);
+	WRITE_ONCE(v->cap_active, true);
+	mutex_unlock(&v->state_lock);
+
 	return 0;
 }
 
 static void hws_stop_streaming(struct vb2_queue *q)
 {
-	struct hws_video *vid = q->drv_priv;
+	struct hws_video *v = q->drv_priv;
 	unsigned long flags;
 
-	/* Stop HW first */
-	hws_enable_video_capture(vid->parent, vid->channel_index, false);
+	/* 1) Stop HW first to quiesce further DMA/IRQs for this channel */
+	hws_enable_video_capture(v->parent, v->channel_index, false);
 
-	spin_lock_irqsave(&vid->irq_lock, flags);
-	vid->cap_active = false;
-	vid->stop_requested = true;
+	/* 2) Flip software state */
+	mutex_lock(&v->state_lock);
+	WRITE_ONCE(v->cap_active, false);
+	WRITE_ONCE(v->stop_requested, true);
+	mutex_unlock(&v->state_lock);
 
-	/* Return in-flight (if any) + all queued as ERROR */
-	if (vid->cur) {
-		vb2_buffer_done(&vid->cur->vb.vb2_buf, VB2_BUF_STATE_ERROR);
-		vid->cur = NULL;
+	/* 3) Return in-flight + queued buffers as ERROR */
+	spin_lock_irqsave(&v->irq_lock, flags);
+
+	if (v->active) {
+		vb2_buffer_done(&v->active->vb.vb2_buf, VB2_BUF_STATE_ERROR);
+		v->active = NULL;
 	}
-	while (!list_empty(&vid->capture_queue)) {
-		struct hwsvideo_buffer *b = list_first_entry(&vid->capture_queue,
-			struct hwsvideo_buffer, queue);
-		list_del(&b->queue);
+
+	while (!list_empty(&v->capture_queue)) {
+		struct hwsvideo_buffer *b =
+			list_first_entry(&v->capture_queue,
+					 struct hwsvideo_buffer, list);
+		list_del(&b->list);
 		vb2_buffer_done(&b->vb.vb2_buf, VB2_BUF_STATE_ERROR);
 	}
-	spin_unlock_irqrestore(&vid->irq_lock, flags);
+
+	spin_unlock_irqrestore(&v->irq_lock, flags);
 }
 
 static const struct vb2_ops hwspcie_video_qops = {

@@ -422,9 +422,6 @@ static void hws_remove(struct pci_dev *pdev)
 
 /* ─────────────────────────────────────────────────────────── */
 /* Per-video-channel initialisation                            */
-/* ------------------------------------------------------------------ */
-/*  Initialise one video channel                                      */
-/* ------------------------------------------------------------------ */
 static int hws_video_init_channel(struct hws_pcie_dev *pdev, int ch)
 {
 	struct hws_video *vid;
@@ -436,7 +433,7 @@ static int hws_video_init_channel(struct hws_pcie_dev *pdev, int ch)
 
 	vid = &pdev->video[ch];
 
-	/* hard reset the per-channel struct */
+	/* hard reset the per-channel struct (safe here since we init everything next) */
 	memset(vid, 0, sizeof(*vid));
 
 	/* identity */
@@ -447,9 +444,13 @@ static int hws_video_init_channel(struct hws_pcie_dev *pdev, int ch)
 	mutex_init(&vid->state_lock);
 	spin_lock_init(&vid->irq_lock);
 	INIT_LIST_HEAD(&vid->capture_queue);
-	vid->cur = NULL;
+	vid->sequence_number = 0;
+	vid->active = NULL;
 
-	/* default format (safe 1080p; adjust to your real HW default) */
+	/* typed tasklet: bind handler once */
+	tasklet_setup(&vid->bh_tasklet, hws_bh_video);
+
+	/* default format (adjust to your HW) */
 	vid->fmt_curr.width  = 1920;
 	vid->fmt_curr.height = 1080;
 
@@ -466,10 +467,7 @@ static int hws_video_init_channel(struct hws_pcie_dev *pdev, int ch)
 	vid->half_seen            = false;
 	vid->signal_loss_cnt      = 0;
 
-	/* V4L2 controls:
-	 * Expose +5V and HPD as volatile, read-only detection bits.
-	 * (Skip/adjust if your HW doesn’t support these or uses different CIDs.)
-	 */
+	/* V4L2 controls (example) */
 	hdl = &vid->control_handler;
 	v4l2_ctrl_handler_init(hdl, 2);
 
@@ -498,19 +496,20 @@ static int hws_video_init_channel(struct hws_pcie_dev *pdev, int ch)
 
 static void hws_video_drain_queue_locked(struct hws_video *vid)
 {
+	/* Return in-flight first */
+	if (vid->active) {
+		vb2_buffer_done(&vid->active->vb.vb2_buf, VB2_BUF_STATE_ERROR);
+		vid->active = NULL;
+	}
+
+	/* Then everything queued */
 	while (!list_empty(&vid->capture_queue)) {
 		struct hwsvideo_buffer *b =
 			list_first_entry(&vid->capture_queue,
 					 struct hwsvideo_buffer, list);
 		list_del_init(&b->list);
-
-		/* Assuming your buffer wraps a vb2 buffer like:
-		 *   struct hwsvideo_buffer { struct vb2_v4l2_buffer vb; ... }
-		 * Adjust if your field is different.
-		 */
 		vb2_buffer_done(&b->vb.vb2_buf, VB2_BUF_STATE_ERROR);
 	}
-	vid->cur = NULL;
 }
 
 void hws_video_cleanup_channel(struct hws_pcie_dev *pdev, int ch)
@@ -523,42 +522,40 @@ void hws_video_cleanup_channel(struct hws_pcie_dev *pdev, int ch)
 
 	vid = &pdev->video[ch];
 
-	/* --- Stop capture best-effort (device-specific hook if you have one) --- */
-	if (vid->cap_active) {
-		vid->stop_requested = true;
-		/* If you have a per-channel stop: hws_hw_stop_channel(pdev, ch); */
-		vid->cap_active = false;
-	}
+	/* 1) Stop HW best-effort for this channel */
+	hws_enable_video_capture(vid->parent, vid->channel_index, false);
 
-	/* --- Drain SW capture queue and in-flight buffer --- */
+	/* 2) Flip software state so IRQ/BH will be no-ops if they run */
+	WRITE_ONCE(vid->stop_requested, true);
+	WRITE_ONCE(vid->cap_active, false);
+
+	/* 3) Make sure the tasklet can’t run anymore (prevents races with drain) */
+	tasklet_kill(&vid->bh_tasklet);
+
+	/* 4) Drain SW capture queue & in-flight under lock */
 	spin_lock_irqsave(&vid->irq_lock, flags);
 	hws_video_drain_queue_locked(vid);
 	spin_unlock_irqrestore(&vid->irq_lock, flags);
 
-	/* --- Release VB2 queue if it was initialized elsewhere --- */
-	/* Heuristic: ops non-NULL -> queue was set up. Safe to call once. */
+	/* 5) Release VB2 queue if initialized */
 	if (vid->buffer_queue.ops)
 		vb2_queue_release(&vid->buffer_queue);
 
-	/* --- Free V4L2 controls --- */
+	/* 6) Free V4L2 controls */
 	v4l2_ctrl_handler_free(&vid->control_handler);
 
-	/* --- Optionally unregister the video_device if this function owns it --- */
-	if (vid->video_device) {
-		/* Only if you registered it with video_register_device() */
-		if (video_is_registered(vid->video_device))
-			video_unregister_device(vid->video_device);
+	/* 7) Unregister the video_device if we own it */
+	if (vid->video_device && video_is_registered(vid->video_device))
+		video_unregister_device(vid->video_device);
+	/* If you allocated it with video_device_alloc(), release it here:
+	 * video_device_release(vid->video_device);
+	 */
+	vid->video_device = NULL;
 
-		/* Only if you allocated with video_device_alloc() */
-		/* video_device_release(vid->video_device); */
-		vid->video_device = NULL;
-	}
-
-	/* --- Reset cheap state (don’t memset the whole struct here) --- */
+	/* 8) Reset simple state (don’t memset the whole struct here) */
 	mutex_destroy(&vid->state_lock);
-	/* spinlocks don’t need explicit destruction */
 	INIT_LIST_HEAD(&vid->capture_queue);
-	vid->cur                 = NULL;
+	vid->active              = NULL;
 	vid->stop_requested      = false;
 	vid->last_buf_half_toggle = 0;
 	vid->half_seen           = false;
