@@ -28,12 +28,6 @@
 
 #define FRAME_DONE_MARK 0x55AAAA55
 
-//-------------------------------------------
-/* One vb2 buffer wrapper per frame */
-struct hwsvideo_buffer {
-	struct vb2_v4l2_buffer vb;
-	struct list_head       queue;   /* linked on hws_video.capture_queue */
-};
 
 /* Convenience cast */
 static inline struct hwsvideo_buffer *to_hwsbuf(struct vb2_buffer *vb)
@@ -69,14 +63,32 @@ static void hws_program_video_from_vb2(struct hws_pcie_dev *hws,
            hws->bar0_base + CBVS_IN_BUF_BASE2 + ch * PCIE_BARADDROFSIZE);
 }
 
-static inline u32 hws_read_port_hpd(struct hws_pcie_dev *pdx, int port)
+static inline u32 hws_read_port_hpd(struct hws_pcie_dev *hws, unsigned int port)
 {
-	/* OR the two pipes that belong to this HDMI jack */
-	int pipe0 = port * 2;
-	int pipe1 = pipe0 + 1;
-	// FIXME
-	return  READ_REGISTER_ULONG(pdx, HWS_REG_HPD(pipe0)) |
-		READ_REGISTER_ULONG(pdx, HWS_REG_HPD(pipe1));
+	u32 v0, v1;
+	unsigned int pipe0, pipe1;
+
+	if (!hws || !hws->bar0_base)
+		return 0;
+
+	/* Each HDMI jack uses two pipes: 2*port and 2*port+1.
+	 * Use cur_max_video_ch since it reflects the active HW config.
+	 */
+	pipe0 = port * 2;
+	pipe1 = pipe0 + 1;
+	if (pipe1 >= hws->cur_max_video_ch)
+		return 0;
+
+	v0 = readl(hws->bar0_base + HWS_REG_HPD(pipe0));
+	v1 = readl(hws->bar0_base + HWS_REG_HPD(pipe1));
+
+	/* Treat all-ones as device-gone and avoid propagating garbage. */
+	if (unlikely(v0 == 0xFFFFFFFF || v1 == 0xFFFFFFFF)) {
+		hws->pci_lost = true;
+		return 0;
+	}
+
+	return v0 | v1;
 }
 
 int set_video_format_size(struct hws_pcie_dev *pdx, int ch, int w, int h)
@@ -106,27 +118,49 @@ int set_video_format_size(struct hws_pcie_dev *pdx, int ch, int w, int h)
 	return 1;
 }
 
-void change_video_size(struct hws_pcie_dev *pdx, int ch, int w, int h,
-			    int interlace)
+static void change_video_size(struct hws_pcie_dev *hws, unsigned int ch,
+			      u32 w, u32 h, bool interlace)
 {
-	int j;
-	int halfframeLength;
-	unsigned long flags;
-	spin_lock_irqsave(&pdx->videoslock[ch], flags);
-	for (j = 0; j < MAX_VIDEO_QUEUE; j++) {
-		pdx->video[ch].queue_status[j].width = w;
-		pdx->video[ch].queue_status[j].height = h;
-		pdx->video[ch].queue_status[j].interlace = interlace;
-	}
-	spin_unlock_irqrestore(&pdx->videoslock[ch], flags);
+	u32 half_len;
+	struct hws_video *vid;
+	bool was_active;
 
-	set_video_format_size(pdx, ch, w, h);
-	halfframeLength = pdx->video[ch].fmt_curr.half_size / 16;
+	if (!hws || !hws->bar0_base)
+		return;
+	if (ch >= hws->max_channels)
+		return;
+	if (!w || !h || w > MAX_VIDEO_HW_W ||
+	    (!interlace && h > MAX_VIDEO_HW_H) ||
+	    ( interlace && (h * 2) > MAX_VIDEO_HW_H))
+		return;
 
-	// FIXME
-	WRITE_REGISTER_ULONG(
-		pdx, (DWORD)(CBVS_IN_BUF_BASE2 + (ch * PCIE_BARADDROFSIZE)),
-		halfframeLength); //Buffer 1 address
+	vid = &hws->video[ch];
+
+	/* Serialize format changes with the channel's state lock. */
+	mutex_lock(&vid->state_lock);
+
+	/* Compute sizes and cache them in vid->fmt_curr. */
+	set_video_format_size(hws, ch, w, h);
+	half_len = vid->fmt_curr.half_size / 16;
+
+	/* If capture is running, pause this channel while we reprogram. */
+	was_active = READ_ONCE(vid->cap_active);
+	if (was_active)
+		hws_enable_video_capture(hws, ch, false);
+
+	/* Program half-frame length for this channel. */
+	writel(half_len, hws->bar0_base +
+	       CBVS_IN_BUF_BASE2 + ch * PCIE_BARADDROFSIZE);
+
+	/* Optional read-back to post the write on some PCIe bridges. */
+	(void)readl(hws->bar0_base +
+		    CBVS_IN_BUF_BASE2 + ch * PCIE_BARADDROFSIZE);
+
+	/* Resume capture if we paused it and streaming wasn't stopped. */
+	if (was_active && !READ_ONCE(vid->stop_requested))
+		hws_enable_video_capture(hws, ch, true);
+
+	mutex_unlock(&vid->state_lock);
 }
 
 static int check_video_capture(struct hws_pcie_dev *hws, unsigned int ch)
@@ -230,11 +264,6 @@ void hws_init_video_sys(struct hws_pcie_dev *hws, bool enable)
     /* 1) reset the decoder mode register to 0 */
     writel(0x00000000, hws->bar0_base + HWS_REG_DEC_MODE);
 
-    // FIXME: remove, once the device has been created, on stream_on it should point the DMA address
-    // correctly to the vb2 buffer. The legacy behavior was to allocate to the driver owned buffer
-    // new behavior should make intelligent decision around when the devices (either alsa or vb2) are created
-    hws_set_dma_address(hws);
-
     /* 3) on a full reset, clear all per-channel status and indices */
     if (!enable) {
         for (i = 0; i < hws->max_channels; i++) {
@@ -258,19 +287,30 @@ void hws_init_video_sys(struct hws_pcie_dev *hws, bool enable)
     hws->start_run = true;
 }
 
-/* ──────────────────────────────────────────────────────────────── */
-/* Utility: compare-and-write to a 32-bit register only if needed  */
-/* ──────────────────────────────────────────────────────────────── */
-static inline void write_if_diff(struct hws_pcie_dev *pdx,
-                                 u32 reg_addr, u32 new_val)
+static inline void hws_write_if_diff(struct hws_pcie_dev *hws,
+				     u32 reg_off, u32 new_val)
 {
+	void __iomem *addr;
+	u32 old;
 
-    // FIXME
-    if (READ_REGISTER_ULONG(pdx, reg_addr) != new_val)
-        // FIXME
-        WRITE_REGISTER_ULONG(pdx, reg_addr, new_val);
+	if (!hws || !hws->bar0_base)
+		return;
+
+	addr = hws->bar0_base + reg_off;
+
+	old = readl(addr);
+	/* Treat all-ones as device gone; avoid writing garbage. */
+	if (unlikely(old == 0xFFFFFFFF)) {
+		hws->pci_lost = true;
+		return;
+	}
+
+	if (old != new_val) {
+		writel(new_val, addr);
+		/* Post the write on some bridges / enforce ordering. */
+		(void)readl(addr);
+	}
 }
-
 /* ──────────────────────────────────────────────────────────────── */
 /* 0. HPD / +5 V                                                   */
 /* ──────────────────────────────────────────────────────────────── */
@@ -314,84 +354,81 @@ static bool hws_update_active_interlace(struct hws_pcie_dev *pdx, unsigned int c
 /* ──────────────────────────────────────────────────────────────── */
 /* 2a. Modern devices (HW version > 0)                              */
 /* ──────────────────────────────────────────────────────────────── */
-static void handle_hwv2_path(struct hws_pcie_dev *pdx, unsigned int ch)
+/* Modern hardware path: keep HW registers in sync with current per-channel
+ * software state. Adjust the OUT_* bits below to match your HW contract.
+ */
+static void handle_hwv2_path(struct hws_pcie_dev *hws, unsigned int ch)
 {
-    /* ── frame-rate in ─────────────────────────────────────────── */
-    // FIXME
-    u32 frame_rate = READ_REGISTER_ULONG(pdx, HWS_REG_FRAME_RATE(ch));
-    pdx->video[ch].queue_status[0].frame_rate = frame_rate;
+	struct hws_video *vid;
+	u32 reg, in_fps, cur_out_res, want_out_res;
 
-    /* ── output resolution (programmed) ────────────────────────── */
-    // FIXME
-    u32 reg          = READ_REGISTER_ULONG(pdx, HWS_REG_OUT_RES(ch));
-    u16 out_res_w    =  reg        & 0xFFFF;
-    u16 out_res_h    = (reg >> 16) & 0xFFFF;
+	if (!hws || !hws->bar0_base || ch >= hws->max_channels)
+		return;
 
-    if (out_res_w != pdx->video[ch].queue_status[0].out_width ||
-        out_res_h != pdx->video[ch].queue_status[0].out_height)
-    {
-        u32 packed =  (pdx->video[ch].queue_status[0].out_height << 16) |
-                       pdx->video[ch].queue_status[0].out_width;
-        write_if_diff(pdx, HWS_REG_OUT_RES(ch), packed);
-    }
+	vid = &hws->video[ch];
 
-    /* ── output frame-rate (programmed) ────────────────────────── */
-    // FIXME
-    u32 out_fps = READ_REGISTER_ULONG(pdx, HWS_REG_OUT_FRAME_RATE(ch));
-    if (out_fps != pdx->video[ch].queue_status[0].out_fps)
-        write_if_diff(pdx, HWS_REG_OUT_FRAME_RATE(ch),
-                           pdx->video[ch].queue_status[0].out_fps);
+	/* 1) Input frame rate (read-only; log or export via debugfs if wanted) */
+	in_fps = readl(hws->bar0_base + HWS_REG_FRAME_RATE(ch));
+	/* dev_dbg(&hws->pdev->dev, "ch%u input fps=%u\n", ch, in_fps); */
 
-    /* ── BCHS (brightness/contrast/hue/saturation) ─────────────── */
-    // FIXME
-    reg = READ_REGISTER_ULONG(pdx, HWS_REG_BCHS(ch));
-    u8 br =  reg        & 0xFF;
-    u8 co = (reg >> 8)  & 0xFF;
-    u8 hu = (reg >> 16) & 0xFF;
-    u8 sa = (reg >> 24) & 0xFF;
+	/* 2) Output resolution programming
+	 * If your HW expects a separate “scaled” size, add fields to track it.
+	 * For now, mirror the current format (fmt_curr) to OUT_RES.
+	 */
+	want_out_res = (vid->fmt_curr.height << 16) | vid->fmt_curr.width;
+	cur_out_res  = readl(hws->bar0_base + HWS_REG_OUT_RES(ch));
+	if (cur_out_res != want_out_res)
+		hws_write_if_diff(hws, HWS_REG_OUT_RES(ch), want_out_res);
 
-    if (br != pdx->video[ch].current_brightness ||
-        co != pdx->video[ch].current_contrast   ||
-        hu != pdx->video[ch].current_hue        ||
-        sa != pdx->video[ch].current_saturation)
-    {
+	/* 3) Output FPS: only program if you actually track a target.
+	 * Example heuristic (disabled by default):
+	 *
+	 *   u32 out_fps = (vid->fmt_curr.height >= 1080) ? 60 : 30;
+	 *   hws_write_if_diff(hws, HWS_REG_OUT_FRAME_RATE(ch), out_fps);
+	 */
 
-        u32 packed =  (pdx->video[ch].current_saturation << 24) |
-                      (pdx->video[ch].current_hue        << 16) |
-                      (pdx->video[ch].current_contrast   <<  8) |
-                       pdx->video[ch].current_brightness;
-        write_if_diff(pdx, HWS_REG_BCHS(ch), packed);
-    }
+	/* 4) BCHS controls: pack from per-channel current_* fields */
+	reg = readl(hws->bar0_base + HWS_REG_BCHS(ch));
+	{
+		u8 br =  reg        & 0xFF;
+		u8 co = (reg >> 8)  & 0xFF;
+		u8 hu = (reg >> 16) & 0xFF;
+		u8 sa = (reg >> 24) & 0xFF;
 
-    /* ── HDCP detect bit ───────────────────────────────────────── */
-    // FIXME
-    reg = READ_REGISTER_ULONG(pdx, HWS_REG_HDCP_STATUS);
-    pdx->video[ch].queue_status[0].hdcp = !!((reg >> ch) & 0x01);
+		if (br != vid->current_brightness ||
+		    co != vid->current_contrast   ||
+		    hu != vid->current_hue        ||
+		    sa != vid->current_saturation) {
+			u32 packed =  (vid->current_saturation << 24) |
+				      (vid->current_hue        << 16) |
+				      (vid->current_contrast   <<  8) |
+				       vid->current_brightness;
+			hws_write_if_diff(hws, HWS_REG_BCHS(ch), packed);
+		}
+	}
+
+	/* 5) HDCP detect: read only (no cache field in your structs today) */
+	reg = readl(hws->bar0_base + HWS_REG_HDCP_STATUS);
+	/* bool hdcp = !!(reg & BIT(ch)); // use if you later add a field/control */
 }
 
-/* ──────────────────────────────────────────────────────────────── */
-/* 2b. Legacy devices (SW FPS estimator)                           */
-/* ──────────────────────────────────────────────────────────────── */
-static void handle_legacy_path(struct hws_pcie_dev *pdx, unsigned int ch)
+static void handle_legacy_path(struct hws_pcie_dev *hws, unsigned int ch)
 {
-    // FIXME
-    u32 sw_rate = pdx->m_dwSWFrameRate[ch];
-
-    if (sw_rate > 10) {
-        int fps;
-        if      (sw_rate > 55 * 2) fps = 60;
-        else if (sw_rate > 45 * 2) fps = 50;
-        else if (sw_rate > 25 * 2) fps = 30;
-        else if (sw_rate > 20 * 2) fps = 25;
-        else                       fps = 60;  /* default fallback */
-
-        // FIXME
-        pdx->m_pVCAPStatus[ch][0].dwFrameRate = fps;
-    }
-
-    // FIXME
-    pdx->m_dwSWFrameRate[ch] = 0;        /* reset estimator window */
+	/* No-op by default. If you introduce a SW FPS accumulator, map it here.
+	 *
+	 * Example skeleton:
+	 *
+	 *   u32 sw_rate = READ_ONCE(hws->sw_fps[ch]); // incremented elsewhere
+	 *   if (sw_rate > THRESHOLD) {
+	 *       u32 fps = pick_fps_from_rate(sw_rate);
+	 *       hws_write_if_diff(hws, HWS_REG_OUT_FRAME_RATE(ch), fps);
+	 *       WRITE_ONCE(hws->sw_fps[ch], 0);
+	 *   }
+	 */
+	(void)hws;
+	(void)ch;
 }
+
 
 /* ──────────────────────────────────────────────────────────────── */
 /* 3. Live input resolution + change_video_size() trigger            */
