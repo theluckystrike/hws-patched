@@ -3,13 +3,160 @@
 #include "hws_reg.h"
 #include "hws_v4l2_tables.h"
 
+
+const v4l2_model_timing_t support_videofmt[] = {
+	[V4L2_MODEL_VIDEOFORMAT_1920X1080P60] =
+		V4L2_MODEL_TIMING(1920, 1080, 60, 0),
+	[V4L2_MODEL_VIDEOFORMAT_1280X720P60] =
+		V4L2_MODEL_TIMING(1280, 720, 60, 0),
+	[V4L2_MODEL_VIDEOFORMAT_720X480P60] =
+		V4L2_MODEL_TIMING(720, 480, 60, 0),
+	[V4L2_MODEL_VIDEOFORMAT_720X576P50] =
+		V4L2_MODEL_TIMING(720, 480, 50, 0),
+	[V4L2_MODEL_VIDEOFORMAT_800X600P60] =
+		V4L2_MODEL_TIMING(800, 600, 60, 0),
+	[V4L2_MODEL_VIDEOFORMAT_640X480P60] =
+		V4L2_MODEL_TIMING(640, 480, 60, 0),
+	[V4L2_MODEL_VIDEOFORMAT_1024X768P60] =
+		V4L2_MODEL_TIMING(1024, 768, 60, 0),
+	[V4L2_MODEL_VIDEOFORMAT_1280X768P60] =
+		V4L2_MODEL_TIMING(1280, 768, 60, 0),
+	[V4L2_MODEL_VIDEOFORMAT_1280X800P60] =
+		V4L2_MODEL_TIMING(1280, 800, 60, 0),
+	[V4L2_MODEL_VIDEOFORMAT_1280X1024P60] =
+		V4L2_MODEL_TIMING(1280, 1024, 60, 0),
+	[V4L2_MODEL_VIDEOFORMAT_1360X768P60] =
+		V4L2_MODEL_TIMING(1360, 768, 60, 0),
+	[V4L2_MODEL_VIDEOFORMAT_1440X900P60] =
+		V4L2_MODEL_TIMING(1440, 900, 60, 0),
+	[V4L2_MODEL_VIDEOFORMAT_1680X1050P60] =
+		V4L2_MODEL_TIMING(1680, 1050, 60, 0),
+	[V4L2_MODEL_VIDEOFORMAT_1080X1920P60] =
+		V4L2_MODEL_TIMING(1080, 1920, 60, 0),
+};
+
+const size_t support_videofmt_count =
+    ARRAY_SIZE(support_videofmt);
+
+
+const framegrabber_pixfmt_t support_pixfmts[] = {
+	
+	[FRAMEGRABBER_PIXFMT_YUYV]={
+		.name     = "4:2:2, packed, YUYV",
+		.fourcc   = V4L2_PIX_FMT_YUYV,
+		.depth    = 16,
+		.is_yuv   = true,
+		.pixfmt_out = YUYV,
+	},
+};
+
+const size_t support_pixfmts_count =
+    ARRAY_SIZE(support_pixfmts);
+
+const int framegrabber_support_refreshrate[] = {
+	[REFRESHRATE_15] = 15,	 [REFRESHRATE_24] = 24,
+	[REFRESHRATE_25] = 25,	 [REFRESHRATE_30] = 30,
+	[REFRESHRATE_50] = 50,	 [REFRESHRATE_60] = 60,
+	[REFRESHRATE_100] = 100, [REFRESHRATE_120] = 120,
+	[REFRESHRATE_144] = 144, [REFRESHRATE_240] = 240,
+};
+
+const size_t num_framerate_controls=
+    ARRAY_SIZE(framegrabber_support_refreshrate);
+
+
+const size_t framegrabber_support_refreshrate_count =
+    ARRAY_SIZE(framegrabber_support_refreshrate);
+
+int v4l2_model_get_support_framerate(int index)
+{
+	if (index < 0 || index >= num_framerate_controls)
+		return -1;
+
+	return (framegrabber_support_refreshrate[index]);
+}
+
+int v4l2_get_suport_VideoFormatIndex(struct v4l2_format *fmt)
+{
+	struct v4l2_pix_format *pix = &fmt->fmt.pix;
+	int index;
+	int videoIndex = -1;
+	for (index = 0; index < V4L2_MODEL_VIDEOFORMAT_NUM; index++) {
+		if ((pix->width == support_videofmt[index].frame_size.width) &&
+		    (pix->height ==
+		     support_videofmt[index].frame_size.height)) {
+			videoIndex = index;
+			break;
+		}
+	}
+	return videoIndex;
+}
+
+v4l2_model_timing_t *v4l2_model_get_support_videoformat(int index)
+{
+	if (index < 0 || index >= V4L2_MODEL_VIDEOFORMAT_NUM)
+		return NULL;
+
+	return (v4l2_model_timing_t *)&support_videofmt[index];
+}
+
+framegrabber_pixfmt_t *v4l2_model_get_support_pixformat(int index)
+{
+	if (index < 0 || index >= ARRAY_SIZE(support_pixfmts))
+		return NULL;
+
+	return (framegrabber_pixfmt_t *)&support_pixfmts[index];
+}
+
+const framegrabber_pixfmt_t *
+framegrabber_g_support_pixelfmt_by_fourcc(u32 fourcc)
+{
+	int i;
+	int pixfmt_index = -1;
+	for (i = 0; i < FRAMEGRABBER_PIXFMT_MAX; i++) {
+		if (support_pixfmts[i].fourcc == fourcc) {
+			pixfmt_index = i;
+			break;
+		}
+	}
+	if (pixfmt_index == -1)
+		return NULL;
+
+	return &support_pixfmts[pixfmt_index];
+}
+
+void framegrabber_g_Curr_input_framesize(struct hws_video *dev, int *width,
+					 int *height)
+{
+	struct hws_pcie_dev *pdx = dev->dev;
+	int index = dev->index;
+	*width = pdx->m_pVCAPStatus[index][0].dwWidth;
+	*height = pdx->m_pVCAPStatus[index][0].dwHeight;
+}
+
+const framegrabber_pixfmt_t *framegrabber_g_out_pixelfmt(struct hws_video *dev)
+{
+	return &support_pixfmts[dev->current_out_pixfmt];
+}
+
+v4l2_model_timing_t *Get_input_framesizeIndex(int width, int height)
+{
+	int i;
+	for (i = 0; i < V4L2_MODEL_VIDEOFORMAT_NUM; i++) {
+		if ((support_videofmt[i].frame_size.width == width) &&
+		    (support_videofmt[i].frame_size.height == height)) {
+			return (v4l2_model_timing_t *)&support_videofmt[i];
+		}
+	}
+	return NULL;
+}
+
 static const struct v4l2_queryctrl g_no_ctrl = {
 	.name = "42",
 	.flags = V4L2_CTRL_FLAG_DISABLED,
 };
 
 static struct v4l2_queryctrl g_hws_ctrls[] = {
-#if 1
 	{
 		V4L2_CID_BRIGHTNESS, //id
 		V4L2_CTRL_TYPE_INTEGER, //type
@@ -54,31 +201,6 @@ static struct v4l2_queryctrl g_hws_ctrls[] = {
 		0, //flags
 		{ 0, 0 }, //reserved[2]
 	},
-#endif
-#if 0
-	{
-		V4L2_CID_AUTOGAIN,           //id
-		V4L2_CTRL_TYPE_INTEGER,        //type
-		"Hdcp enable",                 //name[32]
-		0,                             //minimum
-		1,                             //maximum
-		1,                             //step
-		0,                             //default_value
-		0,                             //flags
-		{ 0, 0 },                      //reserved[2]
-	},
-	{
-		V4L2_CID_GAIN,           //id
-		V4L2_CTRL_TYPE_INTEGER,        //type
-		"Sample rate",                        //name[32]
-		48000,                             //minimum
-		48000,                             //maximum
-		1,                             //step
-		48000,                             //default_value
-		0,                             //flags
-		{ 0, 0 },                      //reserved[2]
-	}
-#endif
 };
 
 #define ARRAY_SIZE_OF_CTRL (sizeof(g_hws_ctrls) / sizeof(g_hws_ctrls[0]))
@@ -118,6 +240,7 @@ static int hws_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 const struct v4l2_ctrl_ops hws_ctrl_ops = {
 	.g_volatile_ctrl = hws_g_volatile_ctrl,
 };
+
 static struct v4l2_queryctrl *find_ctrlByIndex(unsigned int index)
 {
 	//scan supported queryctrl table
@@ -138,6 +261,7 @@ static struct v4l2_queryctrl *find_ctrl(unsigned int id)
 
 	return 0;
 }
+
 int hws_vidioc_querycap(struct file *file, void *priv,
 			       struct v4l2_capability *cap)
 {
