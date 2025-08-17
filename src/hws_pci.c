@@ -118,7 +118,9 @@ static int read_chip_id(struct hws_pcie_dev *hdev)
 {
 	u32   reg;
 	int   i;
-
+    /* mirror PCI IDs for later switches */
+    hdev->device_id = hdev->pdev->device;
+    hdev->vendor_id = hdev->pdev->vendor;
 	/* ── read the on-chip device-info register ─────────────────── */
 	reg = readl(hdev->bar0_base + HWS_REG_DEVICE_INFO);
 
@@ -202,7 +204,7 @@ static void hws_stop_kthread_action(void *data)
 }
 
 
-static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id)
+static int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 {
 	struct hws_pcie_dev *hws;
 	void __iomem *bar0;
@@ -224,11 +226,10 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
 	pci_set_master(pdev);
 
 	/* 2) Map BAR0 with PCIM (auto request_regions + iounmap on detach) */
-	bar0 = pcim_iomap_region(pdev, 0, KBUILD_MODNAME);
-	if (IS_ERR(bar0))
-		return dev_err_probe(&pdev->dev, PTR_ERR(bar0),
-				     "pcim_iomap_region(BAR0)\n");
-	hws->bar0_base = bar0;
+    ret = pcim_iomap_regions(pdev, BIT(0), KBUILD_MODNAME);
+    if (ret)
+       return dev_err_probe(&pdev->dev, ret, "pcim_iomap_regions BAR0\n");
+    hws->bar0_base = pcim_iomap_table(pdev)[0];
 
 	/* 3) DMA mask (try 64-bit, fall back to 32-bit) */
 	if (dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64))) {
@@ -247,11 +248,8 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
 	/* 5) Identify chip & set capabilities */
 	read_chip_id(hws_dev);
 
-	hws_dev->device_id = hws_dev->pdev->device;
-	hws_dev->vendor_id = hws_dev->pdev->vendor;
-	dev_info(&pci_dev->dev, "Device VID=0x%04x, DID=0x%04x\n",
-		 pci_dev->vendor, pci_dev->device);
-
+    dev_info(&pdev->dev, "Device VID=0x%04x, DID=0x%04x\n",
+              pdev->vendor, pdev->device);
 	/* 6) Init channels (explicit unwind on failure is fine here) */
 	for (i = 0; i < hws->max_channels; i++) {
 		ret = hws_video_init_channel(hws, i);
@@ -278,7 +276,7 @@ static int hws_probe(struct pci_dev *pci_dev, const struct pci_device_id *pci_id
 	}
 
 	irq = pci_irq_vector(pdev, 0);
-	ret = devm_request_irq(&pdev->dev, irq, irqhandler, 0,
+	ret = devm_request_irq(&pdev->dev, irq, irqhandler, IRQF_SHARED,
 			       dev_name(&pdev->dev), hws);
 	if (ret) {
 		dev_err(&pdev->dev, "request_irq(%d): %d\n", irq, ret);
@@ -363,9 +361,8 @@ static void hws_stop_dsp(struct hws_pcie_dev *hws)
     /* Tell the DSP to stop */
     writel(0x10, hws->bar0_base + HWS_REG_DEC_MODE);
 
-    /* FIXME: hws_check_busy() should return an error if it times out */
-    hws_check_busy(hws);
-
+    if (hws_check_busy(hws))
+        dev_warn(&hws->pdev->dev, "DSP busy timeout on stop\n");
     /* Disable video capture engine in the DSP */
     writel(0x0, hws->bar0_base + HWS_REG_VCAP_ENABLE);
 }
@@ -385,7 +382,7 @@ static void hws_stop_device(struct hws_pcie_dev *hws)
         hws->pci_lost = true;
     } else {
         /* 3) Tear down each video/audio channel */
-        for (i = 0; i < hws->max_channels; ++i) {
+        for (i = 0; i < hws->cur_max_video_ch; ++i) {
             hws_enable_video_capture(hws, i, false);
             hws_enable_audio_capture(hws, i, false);
         }

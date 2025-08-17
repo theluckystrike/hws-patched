@@ -229,6 +229,7 @@ struct hws_video {
 
 	/* ───── capture queue status ───── */
 	struct hws_video_fmt	 fmt_curr;			/* current format        */
+    u32 alloc_sizeimage;
 
 	/* ───── per-channel capture state ───── */
 	bool					 cap_active;		/* was vcap_started      */
