@@ -12,10 +12,9 @@
 #include <sound/rawmidi.h>
 #include <sound/initval.h>
 
-// FIXME
 extern size_t hws_audio_dma_wptr_bytes(struct hws_pcie_dev *hws, unsigned int ch);
 
-struct snd_pcm_hardware audio_pcm_hardware = {
+static const struct snd_pcm_hardware audio_pcm_hardware = {
 	.info = (SNDRV_PCM_INFO_MMAP | SNDRV_PCM_INFO_INTERLEAVED |
 		 SNDRV_PCM_INFO_BLOCK_TRANSFER | SNDRV_PCM_INFO_RESUME |
 		 SNDRV_PCM_INFO_MMAP_VALID),
@@ -32,132 +31,146 @@ struct snd_pcm_hardware audio_pcm_hardware = {
 	.periods_max = 255,
 };
 
-int hws_start_audio_capture(struct hws_pcie_dev *hws, unsigned int index)
+int hws_start_audio_capture(struct hws_pcie_dev *hws, unsigned int ch)
 {
-	if (!hws || ch >= hws->max_channels)
+    int ret;
+	if (!hws || ch >= hws->cur_max_linein_ch)
 		return -EINVAL;
 
-	/* If already active, ensure HW bit is set and return success. */
-	if (hws->audio[ch].stream_running) {
+	/* Already running? Re-assert HW if needed. */
+	if (READ_ONCE(hws->audio[ch].stream_running)) {
 		if (!hws_check_audio_capture(hws, ch)) {
 			hws_check_card_status(hws);
 			hws_enable_audio_capture(hws, ch, true);
 		}
-		dev_dbg(&hws->pdev->dev,
-			"audio ch %u already running, ensured enabled\n", ch);
+		dev_dbg(&hws->pdev->dev, "audio ch%u already running (re-enabled)\n", ch);
 		return 0;
 	}
 
-	/* Make sure card is healthy */
-	hws_check_card_status(hws);
+     ret = hws_check_card_status(hws);
+     if (ret)
+         return ret;
 
-	hws->audio[ch].stop_requested = false;
-	hws->audio[ch].stream_running = true;
+	/* Prime first period before enabling the engine */
+	hws->audio[ch].next_period = 0;
+	hws_audio_program_next_period(hws, ch);
 
-	/* Kick off the hardware DMA */
+	/* Flip state visible to IRQ */
+	WRITE_ONCE(hws->audio[ch].stop_requested, false);
+	WRITE_ONCE(hws->audio[ch].stream_running, true);
+	WRITE_ONCE(hws->audio[ch].cap_active, true);
+
+	/* Kick HW */
 	hws_enable_audio_capture(hws, ch, true);
-
-	dev_dbg(&hws->pdev->dev, "audio capture started on ch %u\n", ch);
 	return 0;
 }
 
-static void hws_stop_audio_capture(struct hws_pcie_dev *hws,
-                                   unsigned int ch)
+static inline void hws_audio_ack_pending(struct hws_pcie_dev *hws, unsigned int ch)
 {
-	if (!hws || ch >= hws->max_channels)
-		return;
-
-	if (!hws->audio[ch].stream_running)
-		return;
-
-	hws->audio[ch].stop_requested = true;
-	hws->audio[ch].stream_running = false;
-
-	/* Shut off the DMA in hardware */
-	hws_enable_audio_capture(hws, ch, false);
-
-	dev_dbg(&hws->pdev->dev, "audio capture stopped on ch %u\n", ch);
+    u32 abit = HWS_INT_ADONE_BIT(ch);
+    u32 st = readl(hws->bar0_base + HWS_REG_INT_STATUS);
+    if (st & abit) {
+        writel(abit, hws->bar0_base + HWS_REG_INT_ACK);
+        /* flush posted write */
+        readl(hws->bar0_base + HWS_REG_INT_STATUS);
+    }
 }
 
-void hws_enable_audio_capture(struct hws_pcie_dev *hws,
-                                            unsigned int ch,
-                                            bool enable)
+static inline void hws_audio_ack_all(struct hws_pcie_dev *hws)
 {
-    u32 reg, mask = BIT(ch);
+    u32 mask = 0;
+    for (unsigned int ch = 0; ch < hws->cur_max_linein_ch; ++ch)
+        mask |= HWS_INT_ADONE_BIT(ch);
+    if (mask) {
+        writel(mask, hws->bar0_base + HWS_REG_INT_ACK);
+        readl(hws->bar0_base + HWS_REG_INT_STATUS);
+    }
+}
 
-    /* no-op if the card has been lost */
-    if (hws->pci_lost)
+static void hws_stop_audio_capture(struct hws_pcie_dev *hws, unsigned int ch)
+{
+    if (!hws || ch >= hws->cur_max_linein_ch)
         return;
 
-    /* read current enable bitmap */
-    reg = readl(hws->bar0_base + HWS_REG_ACAP_ENABLE);
+    if (!READ_ONCE(hws->audio[ch].stream_running))
+        return;
 
-    if (enable)
-        reg |= mask;
-    else
-        reg &= ~mask;
+    /* 1) Publish software state so IRQ path becomes a no-op */
+    WRITE_ONCE(hws->audio[ch].stream_running, false);
+    WRITE_ONCE(hws->audio[ch].cap_active,     false);
+    WRITE_ONCE(hws->audio[ch].stop_requested, true);
+    smp_wmb(); /* make sure flags are visible before HW disable */
 
-    /* update our software state */
-    hws->cap_active[ch] = enable;
+    /* 2) Disable channel in HW */
+    hws_enable_audio_capture(hws, ch, false);
+    /* flush posted write */
+    readl(hws->bar0_base + HWS_REG_INT_STATUS);
 
-    /* write back to HW */
-    writel(reg, hws->bar0_base + HWS_REG_ACAP_ENABLE);
+    /* 3) Ack any latched ADONE to prevent retrigger storms */
+    hws_audio_ack_pending(hws, ch);
 
-    dev_dbg(&hws->pdev->dev,
-            "audio capture %s on ch %u, reg=0x%08x\n",
-            enable ? "enabled" : "disabled", ch, reg);
+    dev_dbg(&hws->pdev->dev, "audio capture stopped on ch %u\n", ch);
 }
 
-static inline bool hws_check_audio_capture(struct hws_pcie_dev *hws,
-                                           unsigned int ch)
+
+
+void hws_enable_audio_capture(struct hws_pcie_dev *hws,
+			      unsigned int ch, bool enable)
 {
-    u32 reg;
+	u32 reg, mask = BIT(ch);
 
-    /* read back enable bitmap */
-    reg = readl(hws->bar0_base + HWS_REG_ACAP_ENABLE);
+	if (!hws || ch >= hws->cur_max_linein_ch || hws->pci_lost)
+		return;
 
-    return !!(reg & BIT(ch));
+	reg = readl(hws->bar0_base + HWS_REG_ACAP_ENABLE);
+	if (enable)
+		reg |= mask;
+	else
+		reg &= ~mask;
+
+	writel(reg, hws->bar0_base + HWS_REG_ACAP_ENABLE);
+
+	dev_dbg(&hws->pdev->dev, "audio capture %s ch%u, reg=0x%08x\n",
+		enable ? "enabled" : "disabled", ch, reg);
 }
 
-//-------------------------------------------------
-static snd_pcm_uframes_t
-hws_pcie_audio_pointer(struct snd_pcm_substream *substream)
+static inline bool hws_check_audio_capture(struct hws_pcie_dev *hws, unsigned int ch)
 {
-	struct hws_audio *a = snd_pcm_substream_chip(sub);
-	struct snd_pcm_runtime *rt = sub->runtime;
+	u32 reg = readl(hws->bar0_base + HWS_REG_ACAP_ENABLE);
+	return !!(reg & BIT(ch));
+}
+
+static snd_pcm_uframes_t hws_pcie_audio_pointer(struct snd_pcm_substream *substream)
+{
+	struct hws_audio *a = snd_pcm_substream_chip(substream);
+	struct snd_pcm_runtime *rt = substream->runtime;
 	struct hws_pcie_dev *hws = a->parent;
 	unsigned int ch = a->channel_index;
 
-	/* Read HW write offset (bytes from base, already wrapped) */
-	size_t off_bytes = hws_audio_dma_wptr_bytes(hws, ch);
+	size_t off_bytes = hws_audio_dma_wptr_bytes(hws, ch); /* device -> bytes from base */
 	return bytes_to_frames(rt, off_bytes % rt->dma_bytes);
 }
 
-int hws_pcie_audio_open(struct snd_pcm_substream *sub)
+int hws_pcie_audio_open(struct snd_pcm_substream *substream)
 {
-	struct hws_audio *a = snd_pcm_substream_chip(sub);
-	struct snd_pcm_runtime *rt = sub->runtime;
+	struct hws_audio *a = snd_pcm_substream_chip(substream);
+	struct snd_pcm_runtime *rt = substream->runtime;
 
 	rt->hw = audio_pcm_hardware;
-	a->pcm_substream = sub;
+	a->pcm_substream = substream;
 
-	/* If HDMI exposes per-port caps, relax/override here (rates/formats/channels) */
-	/* e.g., update rt->hw.rates |= SNDRV_PCM_RATE_44100; etc. */
-
-	/* Integer periods are typical for DMA engines */
-	snd_pcm_hw_constraint_integer(rt, SNDRV_PCM_HW_PARAM_PERIODS);
-
-	/* If your HW needs period alignment (e.g., 32B), add a constraint here. */
-
+	snd_pcm_hw_constraint_step(rt, 0, SNDRV_PCM_HW_PARAM_PERIOD_BYTES, 32);
 	return 0;
 }
 
 int hws_pcie_audio_close(struct snd_pcm_substream *substream)
 {
-	struct hws_audio *a = snd_pcm_substream_chip(sub);
+	struct hws_audio *a = snd_pcm_substream_chip(substream);
 	a->pcm_substream = NULL;
 	return 0;
 }
+
+
 int hws_pcie_audio_hw_params(struct snd_pcm_substream *substream,
 			     struct snd_pcm_hw_params *hw_params)
 {
@@ -172,41 +185,35 @@ int hws_pcie_audio_hw_free(struct snd_pcm_substream *substream)
 
 int hws_pcie_audio_prepare(struct snd_pcm_substream *substream)
 {
-	// FIXME: program the card with DMA here
-	struct hws_audio *a = snd_pcm_substream_chip(sub);
+	struct hws_audio *a = snd_pcm_substream_chip(substream);
 	struct hws_pcie_dev *hws = a->parent;
-	struct snd_pcm_runtime *rt = sub->runtime;
+	struct snd_pcm_runtime *rt = substream->runtime;
 	unsigned int ch = a->channel_index;
 
-	/* Program your DMA with ALSA-owned buffer */
-	dma_addr_t dma_base   = rt->dma_addr;
-	u32        buf_bytes  = rt->dma_bytes;
-	u32        per_bytes  = frames_to_bytes(rt, rt->period_size);
+	a->period_bytes = frames_to_bytes(rt, rt->period_size);
+	a->periods      = rt->periods;
+	a->next_period  = 0;
 
-	/* Program HW: base address, buffer size, period size, and audio format */
-	hws_prog_dma_base(hws, ch, dma_base, buf_bytes);
-	hws_prog_dma_period(hws, ch, per_bytes);
-	hws_prog_audio_fmt(hws, ch,
-			   /* sample rate */ 48000,            /* or from HDMI caps */
-			   /* channels    */ 2,
-			   /* format      */ SNDRV_PCM_FORMAT_S16_LE);
+	/* Program base/ring and format (device-specific hooks you already have) */
+	hws_prog_dma_base(hws, ch, rt->dma_addr, rt->dma_bytes);
+	hws_prog_dma_period(hws, ch, a->period_bytes);
+	hws_prog_audio_fmt(hws, ch, 48000, 2, SNDRV_PCM_FORMAT_S16_LE);
 
-	/* Clear any per-channel SW tracking if you keep it */
+	/* Optional: clear HW toggle readback */
 	a->last_period_toggle = 0;
-
 	return 0;
 }
 
+
 int hws_pcie_audio_trigger(struct snd_pcm_substream *substream, int cmd)
 {
-
-	struct hws_audio *a = snd_pcm_substream_chip(sub);
+	struct hws_audio *a = snd_pcm_substream_chip(substream);
 	struct hws_pcie_dev *hws = a->parent;
 	unsigned int ch = a->channel_index;
 
-    dev_dbg(&hws->pdev->dev,
-            "audio trigger %d on channel %u\n", cmd, ch);
-    switch (cmd) {
+	dev_dbg(&hws->pdev->dev, "audio trigger %d on ch %u\n", cmd, ch);
+
+	switch (cmd) {
 	case SNDRV_PCM_TRIGGER_START:
 		return hws_start_audio_capture(hws, ch);
 	case SNDRV_PCM_TRIGGER_STOP:
@@ -214,18 +221,14 @@ int hws_pcie_audio_trigger(struct snd_pcm_substream *substream, int cmd)
 		return 0;
 	case SNDRV_PCM_TRIGGER_RESUME:
 	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
-		/* if HW supports, re-enable; otherwise treat like START */
 		return hws_start_audio_capture(hws, ch);
 	case SNDRV_PCM_TRIGGER_SUSPEND:
 	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
-		/* if HW supports pause, disable engine; otherwise treat like STOP */
 		hws_stop_audio_capture(hws, ch);
 		return 0;
 	default:
 		return -EINVAL;
-    }
-
-    return err;
+	}
 }
 
 struct snd_pcm_ops hws_pcie_pcm_ops = { .open = hws_pcie_audio_open,
@@ -264,7 +267,7 @@ int hws_audio_register(struct hws_pcie_dev *hws)
 	strscpy(card->longname,  card->shortname, sizeof(card->longname));
 
 	/* ---- Create one PCM capture device per HDMI input ---- */
-	for (i = 0; i < hws->max_channels; i++) {
+	for (i = 0; i < hws->cur_max_linein_ch; i++) {
 		char pcm_name[32];
 
 		snprintf(pcm_name, sizeof(pcm_name), "HDMI In %d", i);
@@ -317,7 +320,7 @@ int hws_audio_register(struct hws_pcie_dev *hws)
 	/* Store the single card handle (optional: also mirror to each channel if you like) */
 	hws->snd_card = card;
 	dev_info(&hws->pdev->dev, "audio registration complete (%d HDMI inputs)\n",
-	         hws->max_channels);
+	         hws->cur_max_linein_ch);
 	return 0;
 
 error_card:
@@ -328,36 +331,34 @@ error_card:
 
 void hws_audio_unregister(struct hws_pcie_dev *hws)
 {
-	int i;
+    if (!hws)
+        return;
 
-	if (!hws)
-		return;
+    /* Prevent new opens and mark existing streams disconnected */
+    if (hws->snd_card)
+        snd_card_disconnect(hws->snd_card);
 
-	/* Quiesce hardware per channel before tearing ALSA down. */
-	for (i = 0; i < hws->max_channels; i++) {
-		struct hws_audio *a = &hws->audio[i];
+    for (unsigned int i = 0; i < hws->cur_max_linein_ch; i++) {
+        struct hws_audio *a = &hws->audio[i];
 
-		/* Stop capture if it’s running (idempotent). */
-		if (a->stream_running || a->cap_active)
-			hws_enable_audio_capture(hws, i, false);
+        /* Flip flags first so IRQ path won’t call ALSA anymore */
+        WRITE_ONCE(a->stream_running, false);
+        WRITE_ONCE(a->cap_active,     false);
+        WRITE_ONCE(a->stop_requested, true);
 
-		a->cap_active      = false;
-		a->stream_running  = false;
-		a->stop_requested  = false;
-		a->pcm_substream   = NULL;
+        hws_enable_audio_capture(hws, i, false);
+    }
 
-	}
+    /* Flush and ack any pending audio interrupts across all channels */
+    readl(hws->bar0_base + HWS_REG_INT_STATUS);
+    hws_audio_ack_all(hws);
 
-	/*
-	 * Free the single ALSA card. This releases all PCM devices and their
-	 * ALSA-owned DMA buffers that were preallocated with
-	 * snd_pcm_lib_preallocate_pages_for_all().
-	 */
-	if (hws->snd_card) {
-		snd_card_free(hws->snd_card);
-		hws->snd_card = NULL;
-	}
-    dev_info(&hws->pdev->dev, "audio unregistered (%d channels)\n",
-             hws->cur_max_video_ch);
+    if (hws->snd_card) {
+        snd_card_free(hws->snd_card);
+        hws->snd_card = NULL;
+    }
+
+    dev_info(&hws->pdev->dev, "audio unregistered (%u channels)\n",
+             hws->cur_max_linein_ch);
 }
 

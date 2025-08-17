@@ -135,28 +135,30 @@ irqreturn_t irqhandler(int irq, void *info)
             }
         }
 
-        /* ── Audio channels 0–3 ───────────────────────────────────────── */
-        for (int ch = 0; ch < 4; ++ch) {
+        for (unsigned int ch = 0; ch < pdx->cur_max_linein_ch; ++ch) {
             u32 abit = HWS_INT_ADONE_BIT(ch);
             if (!(int_state & abit))
                 continue;
 
             ack_mask |= abit;
 
-            if (!READ_ONCE(&pdx->audio[ch].dma_busy)) {
-                /* Read which half of the audio ring is active */
-		/* Which half is active? (device-specific: 0/1 toggle) */
-		u32 toggle = readl(pdx->bar0_base + HWS_REG_ABUF_TOGGLE(ch)) & 0x01;
-		dma_rmb();  /* make device writes visible */
+            /* Only service running streams */
+            if (!READ_ONCE(pdx->audio[ch].cap_active) ||
+                !READ_ONCE(pdx->audio[ch].stream_running))
+                continue;
 
-		/* Tell ALSA a period elapsed */
-		if (pdx->audio[ch].substream)
-			snd_pcm_period_elapsed(pdx->audio[ch].substream);
+            /* If your HW exposes a 0/1 toggle, read it (optional) */
+            pdx->audio[ch].last_period_toggle =
+                readl(pdx->bar0_base + HWS_REG_ABUF_TOGGLE(ch)) & 0x01;
 
-		/* Program DMA base for the period the HW will fill next.
-		    Many devices toggle: if HW reports 'toggle', the *next* to program is 'toggle'. */
-		hws_audio_program_period(pdx, ch, toggle);
-            }
+            /* Make device writes visible before notifying ALSA */
+            dma_rmb();
+
+            if (pdx->audio[ch].pcm_substream)
+                snd_pcm_period_elapsed(pdx->audio[ch].pcm_substream);
+
+            /* Program the period HW will fill next */
+            hws_audio_program_next_period(pdx, ch);
         }
 
         /* Acknowledge (clear) all bits we just handled */

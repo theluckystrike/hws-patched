@@ -568,67 +568,76 @@ void hws_video_cleanup_channel(struct hws_pcie_dev *pdev, int ch)
 /* ------------------------------------------------------------------ */
 static int hws_audio_init_channel(struct hws_pcie_dev *pdev, int ch)
 {
-	struct hws_audio *aud = &pdev->audio[ch];
-	int               q, err;
+	struct hws_audio *aud;
 
-	/* ── zero entire per-channel struct ─────────────────────────── */
-	memset(aud, 0, sizeof(*aud));
+	if (!pdev || ch < 0 || ch >= pdev->cur_max_linein_ch)
+		return -EINVAL;
 
-	/* ── identify parent + channel index ───────────────────────── */
+	aud = &pdev->audio[ch];
+	memset(aud, 0, sizeof(*aud));     /* ok: no embedded locks yet */
+
+	/* identity */
 	aud->parent        = pdev;
 	aud->channel_index = ch;
 
-	/* ── default PCM parameters (48-kHz / stereo / 16-bit) ─────── */
-	aud->output_sample_rate  = 48000;
-	aud->channel_count       = 2;
-	aud->bits_per_sample     = 16;
+	/* defaults */
+	aud->output_sample_rate = 48000;
+	aud->channel_count      = 2;
+	aud->bits_per_sample    = 16;
 
-	/* ── capture-state flags ───────────────────────────────────── */
-	aud->cap_active      = false;
-	aud->stream_running  = false;
-	aud->stop_requested  = false;
+	/* ALSA linkage */
+	aud->pcm_substream = NULL;
 
-	/* HW period tracking sentinel (optional) */
-	aud->last_period_toggle = 0xFF;  /* means “never toggled yet” */
+	/* ring geometry (set later in .prepare) */
+	aud->periods      = 0;
+	aud->period_bytes = 0;
+	aud->next_period  = 0;
+
+	/* stream state */
+	aud->cap_active     = false;
+	aud->stream_running = false;
+	aud->stop_requested = false;
+
+	/* HW readback sentinel */
+	aud->last_period_toggle = 0xFF;
 
 	return 0;
 }
 
-static void hws_audio_cleanup_channel(struct hws_pcie_dev *pdev, int ch)
+static void hws_audio_cleanup_channel(struct hws_pcie_dev *pdev, int ch, bool device_removal)
 {
 	struct hws_audio *aud;
-	unsigned long pcm_flags;
 
-	if (!pdev)
+	if (!pdev || ch < 0 || ch >= pdev->cur_max_linein_ch)
 		return;
 
 	aud = &pdev->audio[ch];
 
-	/* 1) Stop the hardware stream if it's running (your stop routine). */
-	if (READ_ONCE(aud->stream_running)) {
-		/* Must disable channel IRQs, stop DMA, flush/ack status, etc. */
-		hws_audio_hw_stop(pdev, ch);   /* implement in your HW layer */
-		WRITE_ONCE(aud->stream_running, false);
-	}
+	/* 1) Make IRQ path a no-op first */
+	WRITE_ONCE(aud->stream_running, false);
+	WRITE_ONCE(aud->cap_active,     false);
+	WRITE_ONCE(aud->stop_requested, true);
+	smp_wmb();  /* publish flags before touching HW */
 
-	/* 2) Clear runtime flags. */
-	aud->cap_active     = false;
-	aud->stop_requested = false;
+	/* 2) Quiesce hardware (disable ch, flush, ack pending ADONE) */
+	hws_audio_hw_stop(pdev, ch);  /* should disable capture and ack pending */
 
-	/* 3) If the device is going away while ALSA stream is open, notify ALSA. */
-	if (device_going_away && aud->pcm_substream) {
-		snd_pcm_stream_lock_irqsave(aud->pcm_substream, pcm_flags);
-		snd_pcm_stop(aud->pcm_substream, SNDRV_PCM_STATE_DISCONNECTED);
-		snd_pcm_stream_unlock_irqrestore(aud->pcm_substream, pcm_flags);
+	/* 3) If device is going away and stream was open, tell ALSA */
+	if (device_removal && aud->pcm_substream) {
+		unsigned long flags;
+		snd_pcm_stream_lock_irqsave(aud->pcm_substream, flags);
+		if (aud->pcm_substream->runtime)
+			snd_pcm_stop(aud->pcm_substream, SNDRV_PCM_STATE_DISCONNECTED);
+		snd_pcm_stream_unlock_irqrestore(aud->pcm_substream, flags);
 		aud->pcm_substream = NULL;
 	}
 
-	/* 4) Reset optional book-keeping. */
-	aud->last_period_toggle = 0xFF;   /* sentinel: “never toggled” */
-
-	/* format defaults (rate/ch/bits) can be left as-is or reset if you prefer */
+	/* 4) Clear book-keeping (optional) */
+	aud->next_period        = 0;
+	aud->last_period_toggle = 0xFF;
+	aud->periods            = 0;
+	aud->period_bytes       = 0;
 }
-
 
 static struct pci_driver hws_pci_driver = {
 	.name = KBUILD_MODNAME,

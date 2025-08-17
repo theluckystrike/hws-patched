@@ -284,6 +284,10 @@ struct hws_audio {
 
     /* ALSA */
     struct snd_pcm_substream  *pcm_substream;
+	/* ring geometry (set in prepare/hw_params) */
+	u32 periods;           /* runtime->periods */
+	u32 period_bytes;      /* bytes per period */
+	u32 next_period;       /* SW: next period to program */
 
     /* stream state */
     bool                       cap_active;
