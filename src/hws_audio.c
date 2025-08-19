@@ -31,6 +31,79 @@ static const struct snd_pcm_hardware audio_pcm_hardware = {
 	.periods_max = 255,
 };
 
+int hws_audio_init_channel(struct hws_pcie_dev *pdev, int ch)
+{
+	struct hws_audio *aud;
+
+	if (!pdev || ch < 0 || ch >= pdev->cur_max_linein_ch)
+		return -EINVAL;
+
+	aud = &pdev->audio[ch];
+	memset(aud, 0, sizeof(*aud));     /* ok: no embedded locks yet */
+
+	/* identity */
+	aud->parent        = pdev;
+	aud->channel_index = ch;
+
+	/* defaults */
+	aud->output_sample_rate = 48000;
+	aud->channel_count      = 2;
+	aud->bits_per_sample    = 16;
+
+	/* ALSA linkage */
+	aud->pcm_substream = NULL;
+
+	/* ring geometry (set later in .prepare) */
+	aud->periods      = 0;
+	aud->period_bytes = 0;
+	aud->next_period  = 0;
+
+	/* stream state */
+	aud->cap_active     = false;
+	aud->stream_running = false;
+	aud->stop_requested = false;
+
+	/* HW readback sentinel */
+	aud->last_period_toggle = 0xFF;
+
+	return 0;
+}
+
+void hws_audio_cleanup_channel(struct hws_pcie_dev *pdev, int ch, bool device_removal)
+{
+	struct hws_audio *aud;
+
+	if (!pdev || ch < 0 || ch >= pdev->cur_max_linein_ch)
+		return;
+
+	aud = &pdev->audio[ch];
+
+	/* 1) Make IRQ path a no-op first */
+	WRITE_ONCE(aud->stream_running, false);
+	WRITE_ONCE(aud->cap_active,     false);
+	WRITE_ONCE(aud->stop_requested, true);
+	smp_wmb();  /* publish flags before touching HW */
+
+	/* 2) Quiesce hardware (disable ch, flush, ack pending ADONE) */
+	hws_audio_hw_stop(pdev, ch);  /* should disable capture and ack pending */
+
+	/* 3) If device is going away and stream was open, tell ALSA */
+	if (device_removal && aud->pcm_substream) {
+		unsigned long flags;
+		snd_pcm_stream_lock_irqsave(aud->pcm_substream, flags);
+		if (aud->pcm_substream->runtime)
+			snd_pcm_stop(aud->pcm_substream, SNDRV_PCM_STATE_DISCONNECTED);
+		snd_pcm_stream_unlock_irqrestore(aud->pcm_substream, flags);
+		aud->pcm_substream = NULL;
+	}
+
+	/* 4) Clear book-keeping (optional) */
+	aud->next_period        = 0;
+	aud->last_period_toggle = 0xFF;
+	aud->periods            = 0;
+	aud->period_bytes       = 0;
+}
+
 int hws_start_audio_capture(struct hws_pcie_dev *hws, unsigned int ch)
 {
     int ret;

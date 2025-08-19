@@ -22,6 +22,150 @@
 
 #define FRAME_DONE_MARK 0x55AAAA55
 
+/* ─────────────────────────────────────────────────────────── */
+/* Per-video-channel initialisation                            */
+int hws_video_init_channel(struct hws_pcie_dev *pdev, int ch)
+{
+	struct hws_video *vid;
+	struct v4l2_ctrl_handler *hdl;
+
+	/* basic sanity */
+	if (!pdev || ch < 0 || ch >= pdev->max_channels)
+		return -EINVAL;
+
+	vid = &pdev->video[ch];
+
+	/* hard reset the per-channel struct (safe here since we init everything next) */
+	memset(vid, 0, sizeof(*vid));
+
+	/* identity */
+	vid->parent        = pdev;
+	vid->channel_index = ch;
+
+	/* locks & lists */
+	mutex_init(&vid->state_lock);
+	spin_lock_init(&vid->irq_lock);
+	INIT_LIST_HEAD(&vid->capture_queue);
+	vid->sequence_number = 0;
+	vid->active = NULL;
+
+	/* typed tasklet: bind handler once */
+	tasklet_setup(&vid->bh_tasklet, hws_bh_video);
+
+	/* default format (adjust to your HW) */
+	vid->fmt_curr.width  = 1920;
+	vid->fmt_curr.height = 1080;
+
+	/* color controls default (mid-scale) */
+	vid->current_brightness  = 0x80;
+	vid->current_contrast    = 0x80;
+	vid->current_saturation  = 0x80;
+	vid->current_hue         = 0x80;
+
+	/* capture state */
+	vid->cap_active           = false;
+	vid->stop_requested       = false;
+	vid->last_buf_half_toggle = 0;
+	vid->half_seen            = false;
+	vid->signal_loss_cnt      = 0;
+
+	/* V4L2 controls (example) */
+	hdl = &vid->control_handler;
+	v4l2_ctrl_handler_init(hdl, 2);
+
+	vid->detect_tx_5v_control = v4l2_ctrl_new_std(hdl, &hws_ctrl_ops,
+		V4L2_CID_DV_RX_POWER_PRESENT, 0, 1, 1, 0);
+	if (vid->detect_tx_5v_control)
+		vid->detect_tx_5v_control->flags |=
+			V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_READ_ONLY;
+
+	vid->hotplug_detect_control = v4l2_ctrl_new_std(hdl, &hws_ctrl_ops,
+		V4L2_CID_DV_RX_HOTPLUG, 0, 1, 1, 0);
+	if (vid->hotplug_detect_control)
+		vid->hotplug_detect_control->flags |=
+			V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_READ_ONLY;
+
+	if (hdl->error) {
+		int err = hdl->error;
+		dev_err(&pdev->pdev->dev,
+			"v4l2 ctrl init failed on ch%d: %d\n", ch, err);
+		v4l2_ctrl_handler_free(hdl);
+		return err;
+	}
+
+	return 0;
+}
+
+static void hws_video_drain_queue_locked(struct hws_video *vid)
+{
+	/* Return in-flight first */
+	if (vid->active) {
+		vb2_buffer_done(&vid->active->vb.vb2_buf, VB2_BUF_STATE_ERROR);
+		vid->active = NULL;
+	}
+
+	/* Then everything queued */
+	while (!list_empty(&vid->capture_queue)) {
+		struct hwsvideo_buffer *b =
+			list_first_entry(&vid->capture_queue,
+					 struct hwsvideo_buffer, list);
+		list_del_init(&b->list);
+		vb2_buffer_done(&b->vb.vb2_buf, VB2_BUF_STATE_ERROR);
+	}
+}
+
+void hws_video_cleanup_channel(struct hws_pcie_dev *pdev, int ch)
+{
+	struct hws_video *vid;
+	unsigned long flags;
+
+	if (!pdev || ch < 0 || ch >= pdev->max_channels)
+		return;
+
+	vid = &pdev->video[ch];
+
+	/* 1) Stop HW best-effort for this channel */
+	hws_enable_video_capture(vid->parent, vid->channel_index, false);
+
+	/* 2) Flip software state so IRQ/BH will be no-ops if they run */
+	WRITE_ONCE(vid->stop_requested, true);
+	WRITE_ONCE(vid->cap_active, false);
+
+	/* 3) Make sure the tasklet can’t run anymore (prevents races with drain) */
+	tasklet_kill(&vid->bh_tasklet);
+
+	/* 4) Drain SW capture queue & in-flight under lock */
+	spin_lock_irqsave(&vid->irq_lock, flags);
+	hws_video_drain_queue_locked(vid);
+	spin_unlock_irqrestore(&vid->irq_lock, flags);
+
+	/* 5) Release VB2 queue if initialized */
+	if (vid->buffer_queue.ops)
+		vb2_queue_release(&vid->buffer_queue);
+
+	/* 6) Free V4L2 controls */
+	v4l2_ctrl_handler_free(&vid->control_handler);
+
+	/* 7) Unregister the video_device if we own it */
+	if (vid->video_device && video_is_registered(vid->video_device))
+		video_unregister_device(vid->video_device);
+	/* If you allocated it with video_device_alloc(), release it here:
+	 * video_device_release(vid->video_device);
+	 */
+	vid->video_device = NULL;
+
+	/* 8) Reset simple state (don’t memset the whole struct here) */
+	mutex_destroy(&vid->state_lock);
+	INIT_LIST_HEAD(&vid->capture_queue);
+	vid->active              = NULL;
+	vid->stop_requested      = false;
+	vid->last_buf_half_toggle = 0;
+	vid->half_seen           = false;
+	vid->signal_loss_cnt     = 0;
+}
+
+
+
 
 /* Convenience cast */
 static inline struct hwsvideo_buffer *to_hwsbuf(struct vb2_buffer *vb)
