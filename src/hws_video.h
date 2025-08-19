@@ -2,10 +2,14 @@
 #ifndef HWS_VIDEO_H
 #define HWS_VIDEO_H
 
-void StopKSThread(struct hws_pcie_dev *pdx);
-void StartKSThread(struct hws_pcie_dev *pdx);
 int hws_video_register(struct hws_pcie_dev *dev);
 void hws_video_unregister(struct hws_pcie_dev *dev);
+void hws_enable_video_capture(struct hws_pcie_dev *hws,
+                                     unsigned int chan,
+                                     bool on);
+int hws_video_init_channel(struct hws_pcie_dev *pdev, int ch);
+void hws_video_cleanup_channel(struct hws_pcie_dev *pdev, int ch);
+void check_video_format(struct hws_pcie_dev *pdx);
 
 
 #endif // HWS_VIDEO_H

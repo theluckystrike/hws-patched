@@ -17,7 +17,7 @@ void hws_enable_audio_capture(struct hws_pcie_dev *hws,
 /* Audio capture pipeline APIs */
 int  hws_start_audio_capture(struct hws_pcie_dev *pdx, unsigned int index);
 void hws_stop_audio_capture(struct hws_pcie_dev *pdx, unsigned int index);
-int  hws_copy_audio_to_stream(struct hws_pcie_dev *pdx, unsigned int ch);
-void audio_data_process(struct work_struct *p_work);
+int hws_audio_init_channel(struct hws_pcie_dev *pdev, int ch);
+void hws_audio_cleanup_channel(struct hws_pcie_dev *pdev, int ch, bool device_removal);
 
 #endif /* HWS_AUDIO_PIPELINE_H */

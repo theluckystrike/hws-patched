@@ -3,10 +3,10 @@
 #include <linux/io.h>
 #include <linux/interrupt.h>
 
-#include "hws_interrupt.h"
+#include "hws_irq.h"
 #include "hws_reg.h"
-#include "hws_video_pipeline.h"
-#include "hws_audio_pipeline.h"
+#include "hws_video.h"
+#include "hws_audio.h"
 
 
 #define MAX_INT_LOOPS 100

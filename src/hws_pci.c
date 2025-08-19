@@ -16,6 +16,7 @@
 #include "hws_audio.h"
 #include "hws_reg.h"
 #include "hws_video.h"
+#include "hws_irq.h"
 #include "hws_v4l2_ioctl.h"
 
 #define DRV_NAME "hws"
@@ -113,6 +114,8 @@ static void hws_configure_hardware_capabilities(struct hws_pcie_dev *hdev)
 		hdev->hw_ver = 0;
 	}
 }
+
+static void hws_stop_device(struct hws_pcie_dev *hws);
 
 static int read_chip_id(struct hws_pcie_dev *hdev)
 {
@@ -241,7 +244,7 @@ static int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 #endif
 
 	/* 5) Identify chip & set capabilities */
-	read_chip_id(hws_dev);
+	read_chip_id(hws);
 
     dev_info(&pdev->dev, "Device VID=0x%04x, DID=0x%04x\n",
               pdev->vendor, pdev->device);
@@ -316,7 +319,7 @@ err_unwind_channels:
 	/* explicit per-channel teardown for any initted channels */
 	while (--i >= 0) {
 		hws_video_cleanup_channel(hws, i);
-		hws_audio_cleanup_channel(hws, i);
+		hws_audio_cleanup_channel(hws, i, true);
 	}
 	return ret;
 }
@@ -407,7 +410,7 @@ static void hws_remove(struct pci_dev *pdev)
     /* Per-channel teardown */
     for (i = 0; i < hws->max_channels; i++) {
         hws_video_cleanup_channel(hws, i);
-        hws_audio_cleanup_channel(hws, i);
+        hws_audio_cleanup_channel(hws, i, true);
     }
     /* kthread is stopped by the devm action you added in probe */
 }

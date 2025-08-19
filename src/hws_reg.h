@@ -128,6 +128,11 @@ typedef struct  {
 	framegrabber_pixfmt_enum_t pixfmt_out;
 }framegrabber_pixfmt_t;
 
+typedef struct frame_size
+{
+	int width;
+	int height;
+}framegrabber_frame_size_t;
 	
 typedef struct
 {
