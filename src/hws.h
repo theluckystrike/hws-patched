@@ -16,7 +16,6 @@
 
 struct snd_pcm_substream;
 
-//---------------------------------------------
 #define MAX_USER_IRQ 1
 #define XDMA_CHANNEL_NUM_MAX (1)
 #define MAX_NUM_ENGINES (XDMA_CHANNEL_NUM_MAX * 2)
@@ -146,53 +145,6 @@ struct hwsvideo_buffer {
     void                  *mem;
 };
 
-/*
-| Old field name           | New field name            | Moved from                      |
-| ------------------------ | ------------------------- | ------------------------------- |
-| `dev`                    | `parent`                  | hws\_video                      |
-| `v4l2_dev`               | `v4l2_device`             | hws\_video                      |
-| `vdev`                   | `video_device`            | hws\_video                      |
-| `vq`                     | `buffer_queue`            | hws\_video                      |
-| `queue`                  | `capture_queue`           | hws\_video                      |
-| `seqnr`                  | `sequence_number`         | hws\_video                      |
-| `video_lock`             | `state_lock`              | hws\_video                      |
-| `queue_lock`             | `capture_queue_lock`      | hws\_video                      |
-| `slock`                  | `irq_lock`                | hws\_video                      |
-| `pixfmt`                 | `pixel_format`            | hws\_video                      |
-| `queryIndex`             | `query_index`             | hws\_video                      |
-| `index`                  | `channel_index`           | hws\_video                      |
-| `videowork`              | `video_work`              | hws\_video                      |
-| `Interlaced`             | `interlaced` (now *bool*) | hws\_video                      |
-| `m_Curr_Brightness`      | `current_brightness`      | hws\_video                      |
-| `m_Curr_Contrast`        | `current_contrast`        | hws\_video                      |
-| `m_Curr_Saturation`      | `current_saturation`      | hws\_video                      |
-| `m_Curr_Hue`             | `current_hue`             | hws\_video                      |
-| `current_out_width`      | `output_width`            | hws\_video                      |
-| `curren_out_height`      | `output_height`           | hws\_video                      |
-| `current_out_framerate`  | `output_frame_rate`       | hws\_video                      |
-| `current_out_pixfmt`     | `output_pixel_format`     | hws\_video                      |
-| `current_out_size_index` | `output_size_index`       | hws\_video                      |
-| `m_pbyVideo_phys`        | `buf_phys_addr`           | hws\_pcie\_dev                  |
-| `m_pbyVideoBuffer`       | `buf_virt`                | hws\_pcie\_dev                  |
-| `m_dwVideoBuffer`        | `buf_size_bytes`          | hws\_pcie\_dev                  |
-| `m_dwVideoHighBuffer`    | `buf_high_wmark`          | hws\_pcie\_dev                  |
-| `m_pVCAPStatus`          | `queue_status`            | hws\_pcie\_dev                  |
-| `m_VideoInfo`            | `chan_info`               | hws\_pcie\_dev                  |
-| `m_format`               | `fmt_curr`                | hws\_pcie\_dev                  |
-| `m_bChangeVideoSize`     | `size_changed_flag`       | hws\_pcie\_dev                  |
-| `m_bVCapStarted`         | `cap_active`              | hws\_pcie\_dev                  |
-| `m_nVideoBusy`           | `dma_busy`                | hws\_pcie\_dev                  |
-| `m_bVideoStop`           | `stop_requested`          | hws\_pcie\_dev                  |
-| `m_nRDVideoIndex`        | `rd_idx`                  | hws\_pcie\_dev                  |
-| `m_nVideoBufferIndex`    | `wr_idx`                  | hws\_pcie\_dev                  |
-| `m_nVideoHalfDone`       | `half_done_cnt`           | hws\_pcie\_dev                  |
-| `m_pVideoEvent`          | `irq_event`               | hws\_pcie\_dev                  |
-| `m_bVCapIntDone`         | `irq_done_flag`           | hws\_pcie\_dev                  |
-| `m_curr_No_Video`        | `signal_loss_cnt`         | hws\_pcie\_dev                  |
-| *(none)*                 | `sw_fps`                  | **new diagnostic counter**      |
-*/
-
-
 /* ───────────────────────────────────────────────────────────────────── */
 /*  Per-channel VIDEO state                                             */
 /* ───────────────────────────────────────────────────────────────────── */
@@ -242,42 +194,6 @@ struct hws_video {
 	int						 signal_loss_cnt;	/* no-video counter      */
 };
 
-
-/*
-| Old field name         | New field name                  | Moved from                      |
-| ---------------------- | ------------------------------- | ------------------------------- |
-| `dev`                  | `parent`                        | hws\_audio                      |
-| `card`                 | `sound_card`                    | hws\_audio                      |
-| `substream`            | `pcm_substream`                 | hws\_audio                      |
-| `audiowork`            | `audio_work`                    | hws\_audio                      |
-| `index`                | `channel_index`                 | hws\_audio                      |
-| `pos`                  | `buffer_position`               | hws\_audio                      |
-| `ring_offsize`         | `ring_offset_bytes`             | hws\_audio                      |
-| `ring_over_size`       | `ring_overflow_bytes`           | hws\_audio                      |
-| `ring_wpos_byframes`   | `ring_write_pos_frames`         | hws\_audio                      |
-| `ring_size_byframes`   | `ring_size_frames`              | hws\_audio                      |
-| `period_size_byframes` | `period_size_frames`            | hws\_audio                      |
-| `period_used_byframes` | `period_used_frames`            | hws\_audio                      |
-| `sample_rate_out`      | `output_sample_rate`            | hws\_audio                      |
-| `channels`             | `channel_count`                 | hws\_audio                      |
-| `bits_per_sample`      | `bits_per_sample` *(unchanged)* | hws\_audio                      |
-| `m_pbyAudio_phys`      | `buf_phys_addr`                 | hws\_pcie\_dev                  |
-| `m_pbyAudioBuffer`     | `buf_virt`                      | hws\_pcie\_dev                  |
-| `m_pAudioData`         | `data_buf`                      | hws\_pcie\_dev                  |
-| `m_pAudioData_area`    | `data_area`                     | hws\_pcie\_dev                  |
-| `m_dwAudioBuffer`      | `buf_size_bytes`                | hws\_pcie\_dev                  |
-| `m_dwAudioBufferHigh`  | `buf_high_wmark`                | hws\_pcie\_dev                  |
-| `m_bACapStarted`       | `cap_active`                    | hws\_pcie\_dev                  |
-| `m_nAudioBusy`         | `dma_busy`                      | hws\_pcie\_dev                  |
-| `m_nAudioBufferIndex`  | `wr_idx`                        | hws\_pcie\_dev                  |
-| `m_nRDAudioIndex`      | `rd_idx`                        | hws\_pcie\_dev                  |
-| `m_pAudioEvent`        | `irq_event`                     | hws\_pcie\_dev                  |
-| `m_bAudioRun`          | `stream_running`                | hws\_pcie\_dev                  |
-| `m_bAudioStop`         | `stop_requested`                | hws\_pcie\_dev                  |
-*/
-/* ───────────────────────────────────────────────────────────────────── */
-/*  Per-channel AUDIO state                                             */
-/* ───────────────────────────────────────────────────────────────────── */
 struct hws_audio {
     /* linkage */
     struct hws_pcie_dev       *parent;
@@ -304,38 +220,6 @@ struct hws_audio {
     u16                        bits_per_sample;
 };
 
-/*
-| Old field name            | New field name              | Now lives in   |
-| ------------------------- | --------------------------- | -------------- |
-| `pdev`                    | `pdev`                      | `hws_pcie_dev` |
-| `audio[MAX_VID_CHANNELS]` | `audio[MAX_VID_CHANNELS]`   | `hws_pcie_dev` |
-| `video[MAX_VID_CHANNELS]` | `video[MAX_VID_CHANNELS]`   | `hws_pcie_dev` |
-| `videoslock[]`            | `videoslock[]`              | `hws_pcie_dev` |
-| `audiolock[]`             | `audiolock[]`               | `hws_pcie_dev` |
-| `map_bar0_addr`           | `bar0_base`                 | `hws_pcie_dev` |
-| `wq`                      | `video_wq`                  | `hws_pcie_dev` |
-| `auwq`                    | `audio_wq`                  | `hws_pcie_dev` |
-| `irq_line`                | `irq_line`                  | `hws_pcie_dev` |
-| `msi_enabled`             | `msi_enabled` *(now bool)*  | `hws_pcie_dev` |
-| `msix_enabled`            | `msix_enabled` *(now bool)* | `hws_pcie_dev` |
-| `entry[32]`               | `msix_entries[32]`          | `hws_pcie_dev` |
-| `dwVendorID`              | `vendor_id` *(u16)*         | `hws_pcie_dev` |
-| `dwDeviceID`              | `device_id` *(u16)*         | `hws_pcie_dev` |
-| `m_Device_Version`        | `device_ver`                | `hws_pcie_dev` |
-| `m_DeviceHW_Version`      | `hw_ver`                    | `hws_pcie_dev` |
-| `m_Device_SubVersion`     | `sub_ver`                   | `hws_pcie_dev` |
-| `m_Device_PortID`         | `port_id`                   | `hws_pcie_dev` |
-| `m_Device_SupportYV12`    | `support_yv12`              | `hws_pcie_dev` |
-| `m_MaxHWVideoBufferSize`  | `max_hw_video_buf_sz`       | `hws_pcie_dev` |
-| `m_nMaxChl`               | `max_channels`              | `hws_pcie_dev` |
-| `m_nCurreMaxVideoChl`     | `cur_max_video_ch`          | `hws_pcie_dev` |
-| `m_nCurreMaxLineInChl`    | `cur_max_linein_ch`         | `hws_pcie_dev` |
-| `m_bStartRun`             | `start_run` *(bool)*        | `hws_pcie_dev` |
-| `m_bBufferAllocate`       | `buf_allocated`             | `hws_pcie_dev` |
-| `m_dwAudioPTKSize`        | `audio_pkt_size`            | `hws_pcie_dev` |
-| `mMain_tsk`               | `main_task`                 | `hws_pcie_dev` |
-| `m_PciDeviceLost`         | `pci_lost`                  | `hws_pcie_dev` |
-*/
 struct hws_pcie_dev {
 	/* ───── core objects ───── */
 	struct pci_dev			*pdev;
