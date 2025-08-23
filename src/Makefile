@@ -3,10 +3,7 @@ obj-m = HwsCapture.o
 HwsCapture-objs := \
 	 hws_pci.o \
 	 hws_irq.o \
-	 hws_dma.o \
-	 hws_scaler.o \
-	 hws_video_pipeline.o \
-	 hws-video.o \
+	 hws_video.o \
 	 hws_v4l2_tables.o \
 	 hws_v4l2_ioctl.o \
 	 hws_audio.o 

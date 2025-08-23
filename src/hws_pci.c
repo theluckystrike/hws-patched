@@ -43,7 +43,6 @@
 }
 
 #define CH_SHIFT    2                    /* need 2 bits for 0-3            */
-#define CH_MASK     GENMASK(CH_SHIFT-1, 0)
 
 
 static const struct pci_device_id hws_pci_table[] = {

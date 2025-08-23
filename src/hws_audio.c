@@ -31,6 +31,70 @@ static const struct snd_pcm_hardware audio_pcm_hardware = {
 	.periods_max = 255,
 };
 
+
+void hws_audio_program_next_period(struct hws_pcie_dev *hws, unsigned int ch)
+{
+	struct hws_audio *a;
+	struct snd_pcm_substream *ss;
+	struct snd_pcm_runtime *rt;
+	u32 period_idx, axi_index;
+	dma_addr_t dma;
+	u32 addr_low;
+	const u32 addr_high = 0; /* 32-bit DMA mask => HIGH always 0 */
+	u32 pci_addr_lowmasked, bar_low_masked;
+	u32 table_off;
+	u32 length_units;
+
+	if (WARN_ON(!hws || ch >= hws->cur_max_linein_ch))
+		return;
+
+	a  = &hws->audio[ch];
+	ss = READ_ONCE(a->pcm_substream);
+	if (WARN_ON(!ss || !ss->runtime || !a->periods || !a->period_bytes))
+		return;
+
+	rt = ss->runtime;
+
+	/* Contiguous ALSA DMA buffer; offset = period_idx * period_bytes */
+	period_idx = a->next_period % a->periods;
+	dma = rt->dma_addr + (dma_addr_t)((size_t)period_idx * a->period_bytes);
+
+	/* 32-bit DMA mask guarantees upper_32_bits(dma) == 0 */
+	addr_low = lower_32_bits(dma);
+
+	pci_addr_lowmasked = (addr_low & PCI_E_BAR_ADD_LOWMASK); /* into AXI base */
+	bar_low_masked     = (addr_low & PCI_E_BAR_ADD_MASK);    /* into table LOW */
+
+	/* Legacy address-table layout: start 0x208, step 8 per channel */
+	table_off = (0x208u + (ch * 8u));
+
+	/* 1) Program PCIe address table: HIGH (0) then LOW (BAR-masked) */
+	writel(addr_high, hws->bar0_base + (PCI_ADDR_TABLE_BASE + table_off));
+	writel(bar_low_masked,
+	       hws->bar0_base + (PCI_ADDR_TABLE_BASE + table_off + PCIE_BARADDROFSIZE));
+
+	/* Optional posted-write flush/readback */
+	(void)readl(hws->bar0_base + (PCI_ADDR_TABLE_BASE + table_off));
+	(void)readl(hws->bar0_base + (PCI_ADDR_TABLE_BASE + table_off + PCIE_BARADDROFSIZE));
+
+	/* 2) Program AXI-visible base for AUDIO slot (8 + ch) */
+	axi_index = 8u + ch;
+	writel(((ch + 1u) * PCIEBAR_AXI_BASE) + pci_addr_lowmasked,
+	       hws->bar0_base + (CVBS_IN_BUF_BASE + (axi_index * PCIE_BARADDROFSIZE)));
+
+	/* 3) Program period length (legacy: bytes/16 granularity) */
+	length_units = (a->period_bytes / 16u);
+	writel(length_units,
+	       hws->bar0_base + (CVBS_IN_BUF_BASE2 + (ch * PCIE_BARADDROFSIZE)));
+
+	/* Optional flush */
+	(void)readl(hws->bar0_base + (CVBS_IN_BUF_BASE  + (axi_index * PCIE_BARADDROFSIZE)));
+	(void)readl(hws->bar0_base + (CVBS_IN_BUF_BASE2 + (ch * PCIE_BARADDROFSIZE)));
+
+	/* 4) Advance ring */
+	a->next_period = (period_idx + 1u) % a->periods;
+}
+
 int hws_audio_init_channel(struct hws_pcie_dev *pdev, int ch)
 {
 	struct hws_audio *aud;

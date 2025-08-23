@@ -11,5 +11,8 @@ int hws_video_init_channel(struct hws_pcie_dev *pdev, int ch);
 void hws_video_cleanup_channel(struct hws_pcie_dev *pdev, int ch);
 void check_video_format(struct hws_pcie_dev *pdx);
 
+void hws_program_video_from_vb2(struct hws_pcie_dev *hws,
+                                       unsigned int ch,
+                                       struct vb2_buffer *vb);
 
 #endif // HWS_VIDEO_H

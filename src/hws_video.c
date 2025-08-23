@@ -9,9 +9,7 @@
 #include <media/videobuf2-dma-contig.h>
 #include "hws.h"
 #include "hws_reg.h"
-#include "hws_dma.h"
 #include "hws_video.h"
-#include "hws_video_pipeline.h"
 
 #include <sound/core.h>
 #include <sound/control.h>
@@ -173,7 +171,7 @@ static inline struct hwsvideo_buffer *to_hwsbuf(struct vb2_buffer *vb)
 	return container_of(to_vb2_v4l2_buffer(vb), struct hwsvideo_buffer, vb);
 }
 
-static void hws_program_video_from_vb2(struct hws_pcie_dev *hws,
+void hws_program_video_from_vb2(struct hws_pcie_dev *hws,
                                        unsigned int ch,
                                        struct vb2_buffer *vb)
 {

@@ -20,7 +20,7 @@ struct snd_pcm_substream;
 #define XDMA_CHANNEL_NUM_MAX (1)
 #define MAX_NUM_ENGINES (XDMA_CHANNEL_NUM_MAX * 2)
 
-#define  PCIE_BARADDROFSIZE 4
+#define  PCIE_BARADDROFSIZE 4u
 
 #define PCI_BUS_ACCESS_BASE       0x00000000U
 #define INT_EN_REG_BASE           (PCI_BUS_ACCESS_BASE + 0x0134U)

@@ -2,6 +2,8 @@
 #include <linux/compiler.h>
 #include <linux/io.h>
 #include <linux/interrupt.h>
+#include <linux/dma-mapping.h>
+#include <linux/interrupt.h>
 
 #include "hws_irq.h"
 #include "hws_reg.h"
@@ -10,29 +12,7 @@
 
 
 #define MAX_INT_LOOPS 100
-
-
-static inline void hws_audio_program_period(struct hws_pcie_dev *hws, u32 ch, u32 period)
-{
-    struct hws_audio_chan *a = &hws->audio[ch];
-    struct snd_pcm_substream *ss = READ_ONCE(a->substream);
-    struct snd_pcm_runtime  *rt;
-
-    if (!ss) return;
-    rt = ss->runtime;
-
-    /* ALSA exposes the base DMA address of the whole PCM buffer */
-    dma_addr_t base = rt->dma_addr;
-    dma_addr_t paddr = base + (dma_addr_t)(period % a->periods) * a->period_bytes;
-
-    /* Your device wants: (AXI base for ch) + low bits of phys addr */
-    u32 lo = lower_32_bits(paddr);
-    u32 pci_off = lo & ADDR_LOW_MASK;
-
-    writel((ch + 1) * PCIEBAR_AXI_BASE + pci_off,
-           hws->bar0_base + CBVS_IN_BUF_BASE + (8 + ch) * PCIE_BARADDROFSIZE);
-    /* If you also need to program a length register, do it here using a->period_bytes */
-}
+#define CH_MASK     GENMASK(CH_SHIFT-1, 0)
 
 
 static int hws_arm_next(struct hws_pcie_dev *hws, u32 ch)
@@ -176,90 +156,3 @@ irqreturn_t irqhandler(int irq, void *info)
 
     return IRQ_HANDLED;
 }
-
-int hws_set_audio_queue(struct hws_pcie_dev *hws, unsigned int ch)
-{
-    int ret = 0;
-
-    dev_dbg(&hws->pdev->dev,
-            "set audio queue on channel %u\n", ch);
-
-    /* no DMA until capture has been enabled */
-    if (!hws->audio[ch].cap_active)
-        return -ENODEV;
-
-    /* if stream is stopped, clear stop flag and exit */
-    if (!hws->audio[ch].stream_running) {
-        if (atomic_read(&hws->audio[ch].stop_requested)) {
-	    atomic_set(&hws->audio[ch].stop_requested, 0);
-            dev_dbg(&hws->pdev->dev,
-                    "cleared stop flag on channel %u\n", ch);
-        }
-	atomic_set(&hws->audio[ch].dma_busy, 0);
-        return 0;
-    }
-
-    /* mark DMA busy while copying */
-    atomic_set(&hws->audio[ch].dma_busy, 1);
-    ret = hws_copy_audio_to_stream(hws, ch);
-    atomic_set(&hws->audio[ch].dma_busy, 0);
-
-    return ret;
-}
-
-static inline void unpack_dev_ch(unsigned long data,
-                                 struct hws_pcie_dev **dev, u32 *ch)
-{
-        *ch  = data & CH_MASK;
-        *dev = (struct hws_pcie_dev *)(data & ~CH_MASK);
-}
-
-void hws_dpc_audio(unsigned long data)
-{
-        struct hws_pcie_dev *hws;
-        u32                  ch;
-
-        unpack_dev_ch(data, &hws, &ch);
-        hws_set_audio_queue(hws, ch);          /* unchanged business logic */
-}
-
-/* called by the IRQ as tasklet_schedule(&v->video_bottom_half) */
-static void hws_dpc_video(unsigned long data)
-{
-    struct hws_pcie_dev *hws;
-    u32 ch;
-    struct hws_video *v;
-    struct hwsvideo_buffer *done;
-    int ret;
-
-    unpack_dev_ch(data, &hws, &ch);
-    v = &hws->video[ch];
-
-    /* if stopping or not active, do nothing */
-    if (unlikely(READ_ONCE(v->stop_requested) || !READ_ONCE(v->cap_active)))
-        return;
-
-    /* 1) Complete the buffer the HW just finished (if any) */
-    done = v->active;
-    if (done) {
-        struct vb2_v4l2_buffer *vb2v = &done->vb;
-
-        /* make sure device writes are visible before userspace sees it */
-        dma_rmb();
-
-        vb2v->sequence = atomic_inc_return(&v->sequence_number);
-        vb2v->vb2_buf.timestamp = ktime_get_ns();
-
-        v->active = NULL; /* channel no longer owns this buffer */
-        vb2_buffer_done(&vb2v->vb2_buf, VB2_BUF_STATE_DONE);
-    }
-
-    /* 2) Immediately arm the next queued buffer (if present) */
-    ret = hws_arm_next(hws, ch);
-    if (ret == -EAGAIN) {
-        /* No queued buffers; optional: mask ch IRQ or mark queue error */
-        return;
-    }
-    /* on success the engine is now pointed at v->active’s DMA address */
-}
-
