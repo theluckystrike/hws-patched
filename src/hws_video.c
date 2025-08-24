@@ -3,12 +3,12 @@
 #include <linux/kernel.h>
 #include <linux/overflow.h>
 #include <media/videobuf2-v4l2.h>
-#include <linux/delay.h>             /* udelay */
+#include <linux/delay.h>
 #include <linux/bits.h>
-#include <media/v4l2-ioctl.h>        /* video_ioctl2 */
-#include <media/v4l2-ctrls.h>        /* V4L2_CID_DV_RX_* + ctrl API */
+#include <media/v4l2-ioctl.h>
+#include <media/v4l2-ctrls.h>
 #include <media/v4l2-dev.h>
-#include <media/v4l2-event.h>        /* v4l2_event_queue */
+#include <media/v4l2-event.h>
 
 #include <media/videobuf2-core.h>
 #include <media/v4l2-device.h>
@@ -16,7 +16,9 @@
 #include "hws.h"
 #include "hws_reg.h"
 #include "hws_video.h"
+#include "hws_audio.h"
 #include "hws_irq.h"
+#include "hws_v4l2_ioctl.h"
 
 #include <sound/core.h>
 #include <sound/control.h>
@@ -353,6 +355,25 @@ void check_video_format(struct hws_pcie_dev *pdx)
 		// FIXME: figure out if we can check update_hpd_status early and exit fast
 		// get_video_status calls -> update_active_and_interlace_flags -> readl 
 		pdx->video[i].signal_loss_cnt = get_video_status(pdx, i);
+	    // FIXME: I don't think this works?
+	    // if (!update_hpd_status(pdx, ch))
+	    //    return 1;                         /* no +5 V / HPD */
+
+	    if (!hws_update_active_and_interlace_flags(pdx, ch))
+		// return 1;                         /* no active video */
+		pdx->video[i].signal_loss_cnt = 1;
+	    else {
+
+		    if (pdx->hw_ver> 0)
+			handle_hwv2_path(pdx, ch);
+		    else
+			// FIXME: legacy struct names in subfunction
+			handle_legacy_path(pdx, ch);
+
+		    update_live_resolution(pdx, ch);
+			pdx->video[i].signal_loss_cnt = 0;
+	    }
+
 
 		/* If we just detected a loss on an active capture channel… */
 		if ((pdx->video[i].signal_loss_cnt  == 0x1) &&
@@ -423,6 +444,7 @@ static bool hws_update_active_interlace(struct hws_pcie_dev *pdx, unsigned int c
 	active    = !!(reg & BIT(ch));
 	interlace = !!(reg & BIT(8 + ch));
 
+	// FIXME: missing, should be in fmt_curr?
 	WRITE_ONCE(pdx->video[ch].is_interlaced, interlace);
 	return active;
 }
@@ -612,9 +634,6 @@ static void hws_video_apply_mode_change(struct hws_pcie_dev *pdx, unsigned int c
 }
 
 
-/* ──────────────────────────────────────────────────────────────── */
-/* 3. Live input resolution + change_video_size() trigger            */
-/* ──────────────────────────────────────────────────────────────── */
 static void update_live_resolution(struct hws_pcie_dev *pdx, unsigned int ch)
 {
 	u32 reg   = readl(pdx->bar0_base + HWS_REG_IN_RES(ch));
@@ -638,22 +657,6 @@ static void update_live_resolution(struct hws_pcie_dev *pdx, unsigned int ch)
 
 int get_video_status(struct hws_pcie_dev *pdx, unsigned int ch)
 {
-    // FIXME: I don't think this works?
-    // if (!update_hpd_status(pdx, ch))
-    //    return 1;                         /* no +5 V / HPD */
-
-    if (!update_active_and_interlace_flags(pdx, ch))
-        return 1;                         /* no active video */
-
-    if (pdx->hw_ver> 0)
-        handle_hwv2_path(pdx, ch);
-    else
-        // FIXME: legacy struct names in subfunction
-        handle_legacy_path(pdx, ch);
-
-    update_live_resolution(pdx, ch);
-
-    return 0;                             /* success */
 }
 
 
@@ -683,34 +686,6 @@ static const struct v4l2_file_operations hws_fops = {
 	.mmap = vb2_fop_mmap,
 };
 
-static int hws_vidioc_querycap(struct file *file, void *priv,
-                               struct v4l2_capability *cap)
-{
-	struct hws_video *vid = video_drvdata(file);
-	struct hws_pcie_dev *hws = vid->parent;
-
-	memset(cap, 0, sizeof(*cap));
-
-	/* Driver and card strings */
-	strscpy(cap->driver, KBUILD_MODNAME, sizeof(cap->driver));
-	snprintf(cap->card, sizeof(cap->card), "%s %u", HWS_VIDEO_NAME,
-	         vid->channel_index);
-
-	/* Bus info: prefer PCI slot name if available */
-	if (hws && hws->pdev)
-		strscpy(cap->bus_info, pci_name(hws->pdev),
-		        sizeof(cap->bus_info));
-	else
-		strscpy(cap->bus_info, "platform:hws",
-		        sizeof(cap->bus_info));
-
-	/* Capabilities */
-	cap->device_caps  = V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_STREAMING;
-	cap->capabilities = cap->device_caps | V4L2_CAP_DEVICE_CAPS;
-
-	return 0;
-}
-
 static const struct v4l2_ioctl_ops hws_ioctl_fops = {
 	.vidioc_querycap = hws_vidioc_querycap,
 	.vidioc_enum_fmt_vid_cap = hws_vidioc_enum_fmt_vid_cap,
@@ -725,16 +700,9 @@ static const struct v4l2_ioctl_ops hws_ioctl_fops = {
 	.vidioc_dqbuf = vb2_ioctl_dqbuf,
 	.vidioc_streamon = vb2_ioctl_streamon,
 	.vidioc_streamoff = vb2_ioctl_streamoff,
-	.vidioc_g_std = hws_vidioc_g_std,
-	.vidioc_s_std = hws_vidioc_s_std,
 	.vidioc_enum_framesizes = hws_vidioc_enum_framesizes,
 	.vidioc_enum_frameintervals = hws_vidioc_enum_frameintervals,
-	// .vidioc_g_ctrl = hws_vidioc_g_ctrl,
-	// .vidioc_s_ctrl = hws_vidioc_s_ctrl,
-	// .vidioc_queryctrl = hws_vidioc_queryctrl,
 	.vidioc_enum_input = hws_vidioc_enum_input,
-	.vidioc_g_input = hws_vidioc_g_input,
-	.vidioc_s_input = hws_vidioc_s_input,
 	.vidioc_log_status = vidioc_log_status,
 	.vidioc_subscribe_event = v4l2_ctrl_subscribe_event,
 	.vidioc_unsubscribe_event = v4l2_event_unsubscribe,
@@ -753,7 +721,7 @@ static u32 hws_calc_sizeimage(struct hws_video *v, u16 w, u16 h, bool interlaced
 
 static int hws_queue_setup(struct vb2_queue *q, unsigned int *num_buffers,
 			   unsigned int *num_planes, unsigned int sizes[],
-			   const struct device *alloc_devs[])
+			   struct device *alloc_devs[])
 {
 	struct hws_video *vid = q->drv_priv;
 	struct hws_pcie_dev *hws = vid->parent;

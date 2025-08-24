@@ -65,26 +65,20 @@ struct hwsmem_param
 	u32 status;
 };
 
-
-typedef enum 
-{
-   StandardNone				= 0x80000000,
-   StandardNTSC				= 0x00000001,
-   StandardPAL				= 0x00000002,
-   StandardSECAM			= 0x00000004,
-} VideoStandard_t;  
-
-struct hws_video_fmt {
-	u32 channel;     /* 0-3 */
-	u32 standard;    /* NTSC / PAL / … */
-	u32 odd_only;    /* 1 = odd-fields only */
-	u32 width;
-	u32 height;
-	u32 frame;       /* NTSC : 1~30, PAL : 101~125(1~25) */
-	u32 half_size;
-	u32 down_size;
+struct hws_pix_state {
+	u32                   width;
+	u32                   height;
+	u32                   fourcc;       /* V4L2_PIX_FMT_* (YUYV only here) */
+	u32                   bytesperline; /* stride */
+	u32                   sizeimage;    /* full frame */
+	enum v4l2_field       field;        /* V4L2_FIELD_NONE or INTERLACED */
+	enum v4l2_colorspace  colorspace;   /* e.g., REC709 */
+	enum v4l2_ycbcr_encoding ycbcr_enc; /* V4L2_YCBCR_ENC_DEFAULT */
+	enum v4l2_quantization quantization;/* V4L2_QUANTIZATION_LIM_RANGE */
+	enum v4l2_xfer_func   xfer_func;    /* V4L2_XFER_FUNC_DEFAULT */
+	bool                  interlaced;   /* cached hardware state */
+	u32                   half_size;    /* optional: if your HW needs it */
 };
-
 
 #define	UNSET	(-1U)
 
@@ -132,8 +126,9 @@ struct hws_video {
 	struct v4l2_ctrl		*hotplug_detect_control;
 
 	/* ───── capture queue status ───── */
-	struct hws_video_fmt	 fmt_curr;			/* current format        */
-    u32 alloc_sizeimage;
+	// FIXME: https://chatgpt.com/s/t_68aaabb351b48191b791152813d52e9a
+	struct hws_pix_state         pix;
+	u32 alloc_sizeimage;
 
 	/* ───── per-channel capture state ───── */
 	bool					 cap_active;		/* was vcap_started      */
