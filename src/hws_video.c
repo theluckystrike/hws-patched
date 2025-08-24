@@ -29,6 +29,12 @@
 
 #define FRAME_DONE_MARK 0x55AAAA55
 
+static void update_live_resolution(struct hws_pcie_dev *pdx, unsigned int ch);
+static bool hws_update_active_interlace(struct hws_pcie_dev *pdx, unsigned int ch);
+static void handle_hwv2_path(struct hws_pcie_dev *hws, unsigned int ch);
+static void handle_legacy_path(struct hws_pcie_dev *hws, unsigned int ch);
+static u32 hws_calc_sizeimage(struct hws_video *v, u16 w, u16 h, bool interlaced);
+
 /* ─────────────────────────────────────────────────────────── */
 /* Per-video-channel initialisation                            */
 int hws_video_init_channel(struct hws_pcie_dev *pdev, int ch)
@@ -60,8 +66,19 @@ int hws_video_init_channel(struct hws_pcie_dev *pdev, int ch)
 	tasklet_setup(&vid->bh_tasklet, hws_bh_video);
 
 	/* default format (adjust to your HW) */
-	vid->fmt_curr.width  = 1920;
-	vid->fmt_curr.height = 1080;
+	vid->pix.width        = 1920;
+	vid->pix.height       = 1080;
+	vid->pix.fourcc       = V4L2_PIX_FMT_YUYV;
+	vid->pix.bytesperline = ALIGN(vid->pix.width * 2, 64);
+	vid->pix.sizeimage    = vid->pix.bytesperline * vid->pix.height;
+	vid->pix.field        = V4L2_FIELD_NONE;
+	vid->pix.colorspace   = V4L2_COLORSPACE_REC709;
+	vid->pix.ycbcr_enc    = V4L2_YCBCR_ENC_DEFAULT;
+	vid->pix.quantization = V4L2_QUANTIZATION_LIM_RANGE;
+	vid->pix.xfer_func    = V4L2_XFER_FUNC_DEFAULT;
+	vid->pix.interlaced   = false;
+	vid->pix.half_size    = vid->pix.sizeimage / 2; /* if HW uses halves */
+	vid->alloc_sizeimage  = vid->pix.sizeimage;
 
 	/* color controls default (mid-scale) */
 	vid->current_brightness  = 0x80;
@@ -78,18 +95,12 @@ int hws_video_init_channel(struct hws_pcie_dev *pdev, int ch)
 
 	/* V4L2 controls (example) */
 	hdl = &vid->control_handler;
-	v4l2_ctrl_handler_init(hdl, 2);
+	v4l2_ctrl_handler_init(hdl, 1);
 
 	vid->detect_tx_5v_control = v4l2_ctrl_new_std(hdl, &hws_ctrl_ops,
 		V4L2_CID_DV_RX_POWER_PRESENT, 0, 1, 1, 0);
 	if (vid->detect_tx_5v_control)
 		vid->detect_tx_5v_control->flags |=
-			V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_READ_ONLY;
-
-	vid->hotplug_detect_control = v4l2_ctrl_new_std(hdl, &hws_ctrl_ops,
-		V4L2_CID_DV_RX_HOTPLUG, 0, 1, 1, 0);
-	if (vid->hotplug_detect_control)
-		vid->hotplug_detect_control->flags |=
 			V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_READ_ONLY;
 
 	if (hdl->error) {
@@ -206,7 +217,7 @@ void hws_program_video_from_vb2(struct hws_pcie_dev *hws,
 		                      ch * PCIE_BARADDROFSIZE);
 
 	/* If HW uses half-buffer toggling, program half_size (device-specific) */
-	writel_relaxed(hws->video[ch].fmt_curr.half_size / 16,
+	writel_relaxed(hws->video[ch].pix.half_size / 16,
 		       hws->bar0_base + CVBS_IN_BUF_BASE2 +
 		                      ch * PCIE_BARADDROFSIZE);
 
@@ -347,30 +358,26 @@ static int hws_check_card_status(struct hws_pcie_dev *hws)
 	return 0;
 }
 
-
 void check_video_format(struct hws_pcie_dev *pdx)
 {
 	int i;
 	for (i = 0; i < pdx->cur_max_video_ch; i++) {
-		// FIXME: figure out if we can check update_hpd_status early and exit fast
-		// get_video_status calls -> update_active_and_interlace_flags -> readl 
-		pdx->video[i].signal_loss_cnt = get_video_status(pdx, i);
 	    // FIXME: I don't think this works?
 	    // if (!update_hpd_status(pdx, ch))
 	    //    return 1;                         /* no +5 V / HPD */
 
-	    if (!hws_update_active_and_interlace_flags(pdx, ch))
+	    if (!hws_update_active_interlace(pdx, i))
 		// return 1;                         /* no active video */
 		pdx->video[i].signal_loss_cnt = 1;
 	    else {
 
 		    if (pdx->hw_ver> 0)
-			handle_hwv2_path(pdx, ch);
+			handle_hwv2_path(pdx, i);
 		    else
 			// FIXME: legacy struct names in subfunction
-			handle_legacy_path(pdx, ch);
+			handle_legacy_path(pdx, i);
 
-		    update_live_resolution(pdx, ch);
+		    update_live_resolution(pdx, i);
 			pdx->video[i].signal_loss_cnt = 0;
 	    }
 
@@ -444,8 +451,7 @@ static bool hws_update_active_interlace(struct hws_pcie_dev *pdx, unsigned int c
 	active    = !!(reg & BIT(ch));
 	interlace = !!(reg & BIT(8 + ch));
 
-	// FIXME: missing, should be in fmt_curr?
-	WRITE_ONCE(pdx->video[ch].is_interlaced, interlace);
+	WRITE_ONCE(pdx->video[ch].pix.interlaced, interlace);
 	return active;
 }
 
@@ -473,7 +479,7 @@ static void handle_hwv2_path(struct hws_pcie_dev *hws, unsigned int ch)
 	 * If your HW expects a separate “scaled” size, add fields to track it.
 	 * For now, mirror the current format (fmt_curr) to OUT_RES.
 	 */
-	want_out_res = (vid->fmt_curr.height << 16) | vid->fmt_curr.width;
+	want_out_res = (vid->pix.height << 16) | vid->pix.width;
 	cur_out_res  = readl(hws->bar0_base + HWS_REG_OUT_RES(ch));
 	if (cur_out_res != want_out_res)
 		hws_write_if_diff(hws, HWS_REG_OUT_RES(ch), want_out_res);
@@ -535,30 +541,24 @@ static void hws_video_apply_mode_change(struct hws_pcie_dev *pdx, unsigned int c
 	u32 new_size;
 	bool reenable = false;
 
-    if (!pdx || !pdx->bar0_base)
-        return;
-    if (ch >= pdx->max_channels)
-        return;
-    if (!w || !h || w > MAX_VIDEO_HW_W ||
-        (!interlaced && h > MAX_VIDEO_HW_H) ||
-        ( interlaced && (h * 2) > MAX_VIDEO_HW_H))
-        return;
+	if (!pdx || !pdx->bar0_base)
+		return;
+	if (ch >= pdx->max_channels)
+		return;
+	if (!w || !h || w > MAX_VIDEO_HW_W ||
+	    (!interlaced && h > MAX_VIDEO_HW_H) ||
+	    ( interlaced && (h * 2) > MAX_VIDEO_HW_H))
+		return;
 
-
-	/* 1) Publish SW state so IRQ/BH become no-ops */
 	WRITE_ONCE(v->stop_requested, true);
 	WRITE_ONCE(v->cap_active, false);
-	smp_wmb(); /* flags visible before HW disable */
+	smp_wmb();
 
-	/* 2) Stop HW capture for this channel */
 	hws_enable_video_capture(pdx, ch, false);
-	/* flush posted write */
 	readl(pdx->bar0_base + HWS_REG_INT_STATUS);
 
-	/* 3) Kill BH to avoid races with queue drain */
 	tasklet_kill(&v->bh_tasklet);
 
-	/* 4) Drain in-flight/queued under lock */
 	spin_lock_irqsave(&v->irq_lock, flags);
 	if (v->active) {
 		vb2_buffer_done(&v->active->vb.vb2_buf, VB2_BUF_STATE_ERROR);
@@ -572,18 +572,14 @@ static void hws_video_apply_mode_change(struct hws_pcie_dev *pdx, unsigned int c
 	}
 	spin_unlock_irqrestore(&v->irq_lock, flags);
 
-	/* 5) Update software format and compute new required size */
-	v->fmt_curr.width  = w;
-	v->fmt_curr.height = h;
-	v->is_interlaced   = interlaced;   /* ensure struct has this bool */
+	/* Update software pixel state */
+	v->pix.width      = w;
+	v->pix.height     = h;
+	v->pix.interlaced = interlaced;
 
 	new_size = hws_calc_sizeimage(v, w, h, interlaced);
 
-	/*
-	 * 6) If buffers are allocated and the new size exceeds what vb2 allocated,
-	 *    notify userspace and leave the queue in error so it must STREAMOFF
-	 *    and re-allocate. Do not re-enable capture in this case.
-	 */
+	/* If buffers are smaller than new requirement, signal src-change & error the queue */
 	if (vb2_is_busy(&v->buffer_queue) && new_size > v->alloc_sizeimage) {
 		struct v4l2_event ev = {
 			.type = V4L2_EVENT_SOURCE_CHANGE,
@@ -592,54 +588,47 @@ static void hws_video_apply_mode_change(struct hws_pcie_dev *pdx, unsigned int c
 
 		v4l2_event_queue(v->video_device, &ev);
 		vb2_queue_error(&v->buffer_queue);
-
-		/* Keep the engine disabled; IRQ path is already quiesced. */
 		return;
 	}
 
-	/* 7) Program HW with the new resolution (only if we are going to restart) */
+	/* Program HW with new resolution */
 	hws_write_if_diff(pdx, HWS_REG_OUT_RES(ch), (h << 16) | w);
-	/* Program any other per-mode registers here as needed */
-    /* Legacy half-buffer length programming required by the DMA engine */
-    writel(v->fmt_curr.half_size / 16,
-           pdx->bar0_base + CVBS_IN_BUF_BASE2 + ch * PCIE_BARADDROFSIZE);
-    (void)readl(pdx->bar0_base + CVBS_IN_BUF_BASE2 + ch * PCIE_BARADDROFSIZE);
 
-	/* 8) Reset per-channel toggles/counters the IRQ uses */
+	/* Legacy half-buffer programming */
+	writel(v->pix.half_size / 16,
+	       pdx->bar0_base + CVBS_IN_BUF_BASE2 + ch * PCIE_BARADDROFSIZE);
+	(void)readl(pdx->bar0_base + CVBS_IN_BUF_BASE2 + ch * PCIE_BARADDROFSIZE);
+
+	/* Reset per-channel toggles/counters */
 	WRITE_ONCE(v->last_buf_half_toggle, 0);
 	v->sequence_number = 0;
 
-	/* 9) Re-prime first VB2 buffer (if any queued) */
+	/* Re-prime first VB2 buffer if present */
 	spin_lock_irqsave(&v->irq_lock, flags);
 	if (!list_empty(&v->capture_queue)) {
 		v->active = list_first_entry(&v->capture_queue, struct hwsvideo_buffer, list);
 		list_del_init(&v->active->list);
 		hws_program_video_from_vb2(pdx, ch, &v->active->vb.vb2_buf);
-		reenable = true; /* we have something to capture into */
+		reenable = true;
 	}
 	spin_unlock_irqrestore(&v->irq_lock, flags);
 
-	/* Nothing to do if we have no buffer to arm yet */
 	if (!reenable)
 		return;
 
-	/* 10) Re-enable stream and clear stop flag */
 	WRITE_ONCE(v->stop_requested, false);
 	WRITE_ONCE(v->cap_active, true);
-	smp_wmb(); /* publish before enabling HW */
-
+	smp_wmb();
 	hws_enable_video_capture(pdx, ch, true);
-	/* flush enable */
 	readl(pdx->bar0_base + HWS_REG_INT_STATUS);
 }
-
 
 static void update_live_resolution(struct hws_pcie_dev *pdx, unsigned int ch)
 {
 	u32 reg   = readl(pdx->bar0_base + HWS_REG_IN_RES(ch));
-    u16 res_w =  reg        & 0xFFFF;
-    u16 res_h = (reg >> 16) & 0xFFFF;
-	bool interlace = READ_ONCE(pdx->video[ch].is_interlaced);
+	u16 res_w =  reg        & 0xFFFF;
+	u16 res_h = (reg >> 16) & 0xFFFF;
+	bool interlace = READ_ONCE(pdx->video[ch].pix.interlaced);
 
 	bool within_hw =
 		(res_w <= MAX_VIDEO_HW_W) &&
@@ -649,16 +638,11 @@ static void update_live_resolution(struct hws_pcie_dev *pdx, unsigned int ch)
 	if (!within_hw)
 		return;
 
-	if (res_w != pdx->video[ch].fmt_curr.width ||
-	    res_h != pdx->video[ch].fmt_curr.height) {
+	if (res_w != pdx->video[ch].pix.width ||
+	    res_h != pdx->video[ch].pix.height) {
 		hws_video_apply_mode_change(pdx, ch, res_w, res_h, interlace);
 	}
 }
-
-int get_video_status(struct hws_pcie_dev *pdx, unsigned int ch)
-{
-}
-
 
 static int hws_open(struct file *file)
 {
@@ -710,14 +694,22 @@ static const struct v4l2_ioctl_ops hws_ioctl_fops = {
 	.vidioc_s_parm = hws_vidioc_s_parm,
 };
 
-// FIXME
+
 static u32 hws_calc_sizeimage(struct hws_video *v, u16 w, u16 h, bool interlaced)
 {
 	/* example for packed 16bpp (YUYV); replace with your real math/align */
+	u32 lines        = h; /* full frame lines for sizeimage */
 	u32 bytesperline = ALIGN(w * 2, 64);
-	u32 lines        = h;                    /* full frame lines */
-	return bytesperline * lines;
+
+	/* publish into pix, since we now carry these in-state */
+	v->pix.bytesperline = bytesperline;
+	v->pix.sizeimage    = bytesperline * lines;
+	v->pix.half_size    = v->pix.sizeimage / 2; /* if HW uses halves */
+	v->pix.field        = interlaced ? V4L2_FIELD_INTERLACED : V4L2_FIELD_NONE;
+
+	return v->pix.sizeimage;
 }
+
 
 static int hws_queue_setup(struct vb2_queue *q, unsigned int *num_buffers,
 			   unsigned int *num_planes, unsigned int sizes[],
@@ -728,7 +720,7 @@ static int hws_queue_setup(struct vb2_queue *q, unsigned int *num_buffers,
 	size_t size, tmp;
 
 	/* One plane: YUYV (2 bytes/pixel). Use current programmed OUT WxH. */
-	if (check_mul_overflow(vid->fmt_curr.width, vid->fmt_curr.height, &tmp) ||
+	if (check_mul_overflow(vid->pix.width, vid->pix.height, &tmp) ||
 	    check_mul_overflow(tmp, 2, &size))
 		return -EOVERFLOW;
 
@@ -757,8 +749,7 @@ static int hws_queue_setup(struct vb2_queue *q, unsigned int *num_buffers,
 static int hws_buffer_prepare(struct vb2_buffer *vb)
 {
 	struct hws_video *vid = vb->vb2_queue->drv_priv;
-	size_t need = (size_t)vid->fmt_curr.width * vid->fmt_curr.height * 2;
-
+	size_t need = (size_t)vid->pix.width * vid->pix.height * 2;
 	if (vb2_plane_size(vb, 0) < need)
 		return -EINVAL;
 	if (vb2_plane_size(vb, 0) < vid->alloc_sizeimage)
@@ -893,7 +884,7 @@ int hws_video_register(struct hws_pcie_dev *dev)
 {
 	int i, ret;
 
-	ret = devm_v4l2_device_register(&dev->pdev->dev, &dev->v4l2_device);
+	ret = v4l2_device_register(&dev->pdev->dev, &dev->v4l2_device);
 	if (ret) {
 		dev_err(&dev->pdev->dev, "v4l2_device_register failed: %d\n", ret);
 		return ret;
@@ -913,7 +904,7 @@ int hws_video_register(struct hws_pcie_dev *dev)
 		 * Don’t reinitialize any of those here.
 		 */
 
-		vdev = devm_video_device_alloc(&dev->pdev->dev);
+		vdev = video_device_alloc();
 		if (!vdev) {
 			dev_err(&dev->pdev->dev, "video_device_alloc ch%u failed\n", i);
 			ret = -ENOMEM;
@@ -981,8 +972,14 @@ err_unwind:
         if (ch->buffer_queue.ops)
             vb2_queue_release(&ch->buffer_queue);
 	v4l2_ctrl_handler_free(&ch->control_handler);
-        ch->video_device = NULL;
+        if (ch->video_device) {
+            /* If not registered, we must free the alloc’d vdev ourselves */
+            if (!video_is_registered(ch->video_device))
+                video_device_release(ch->video_device);
+            ch->video_device = NULL;
+        }
     }
+    v4l2_device_unregister(&dev->v4l2_device);
     return ret;
 }
 
@@ -1027,11 +1024,13 @@ void hws_video_unregister(struct hws_pcie_dev *dev)
 
 		/* 5) Unregister the video node (if it was registered). */
 		if (ch->video_device) {
-			if (video_is_registered(ch->video_device))
-				video_unregister_device(ch->video_device);
-			ch->video_device = NULL;
+		    if (video_is_registered(ch->video_device))
+			video_unregister_device(ch->video_device);
+		    else
+			video_device_release(ch->video_device);
+		    ch->video_device = NULL;
 		}
-
+		v4l2_device_unregister(&dev->v4l2_device);
 		/* 6) Reset lightweight state (optional). */
 		ch->cap_active      = false;
 		ch->stop_requested  = false;
