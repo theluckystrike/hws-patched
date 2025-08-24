@@ -93,22 +93,14 @@ int hws_video_init_channel(struct hws_pcie_dev *pdev, int ch)
 	vid->half_seen            = false;
 	vid->signal_loss_cnt      = 0;
 
-	/* V4L2 controls (example) */
-	hdl = &vid->control_handler;
-	v4l2_ctrl_handler_init(hdl, 1);
-
-	vid->detect_tx_5v_control = v4l2_ctrl_new_std(hdl, &hws_ctrl_ops,
-		V4L2_CID_DV_RX_POWER_PRESENT, 0, 1, 1, 0);
-	if (vid->detect_tx_5v_control)
-		vid->detect_tx_5v_control->flags |=
-			V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_READ_ONLY;
-
-	if (hdl->error) {
-		int err = hdl->error;
-		dev_err(&pdev->pdev->dev,
-			"v4l2 ctrl init failed on ch%d: %d\n", ch, err);
-		v4l2_ctrl_handler_free(hdl);
-		return err;
+	/* Create BCHS + DV power-present as modern controls */
+	{
+		int err = hws_ctrls_init(vid);
+		if (err) {
+			dev_err(&pdev->pdev->dev,
+				"v4l2 ctrl init failed on ch%d: %d\n", ch, err);
+			return err;
+		}
 	}
 
 	return 0;
@@ -671,11 +663,16 @@ static const struct v4l2_file_operations hws_fops = {
 };
 
 static const struct v4l2_ioctl_ops hws_ioctl_fops = {
+	/* Core caps/info */
 	.vidioc_querycap = hws_vidioc_querycap,
+
+	/* Pixel format: still needed to report YUYV etc. */
 	.vidioc_enum_fmt_vid_cap = hws_vidioc_enum_fmt_vid_cap,
 	.vidioc_g_fmt_vid_cap = hws_vidioc_g_fmt_vid_cap,
-	.vidioc_s_fmt_vid_cap = vidioc_s_fmt_vid_cap,
+	.vidioc_s_fmt_vid_cap = hws_vidioc_s_fmt_vid_cap,
 	.vidioc_try_fmt_vid_cap = hws_vidioc_try_fmt_vid_cap,
+
+	/* Buffer queueing / streaming */
 	.vidioc_reqbufs = vb2_ioctl_reqbufs,
 	.vidioc_prepare_buf = vb2_ioctl_prepare_buf,
 	.vidioc_create_bufs = vb2_ioctl_create_bufs,
@@ -684,9 +681,19 @@ static const struct v4l2_ioctl_ops hws_ioctl_fops = {
 	.vidioc_dqbuf = vb2_ioctl_dqbuf,
 	.vidioc_streamon = vb2_ioctl_streamon,
 	.vidioc_streamoff = vb2_ioctl_streamoff,
-	.vidioc_enum_framesizes = hws_vidioc_enum_framesizes,
-	.vidioc_enum_frameintervals = hws_vidioc_enum_frameintervals,
-	.vidioc_enum_input = hws_vidioc_enum_input,
+
+	/* Inputs */
+	.vidioc_enum_input        = hws_vidioc_enum_input,
+	.vidioc_g_input           = hws_vidioc_g_input,
+	.vidioc_s_input           = hws_vidioc_s_input,
+
+	/* DV timings (HDMI/DVI/VESA modes) */
+	.vidioc_query_dv_timings  = hws_vidioc_query_dv_timings,
+	.vidioc_enum_dv_timings   = hws_vidioc_enum_dv_timings,
+	.vidioc_g_dv_timings      = hws_vidioc_g_dv_timings,
+	.vidioc_s_dv_timings      = hws_vidioc_s_dv_timings,
+	.vidioc_dv_timings_cap    = hws_vidioc_dv_timings_cap,
+
 	.vidioc_log_status = vidioc_log_status,
 	.vidioc_subscribe_event = v4l2_ctrl_subscribe_event,
 	.vidioc_unsubscribe_event = v4l2_event_unsubscribe,
@@ -922,6 +929,8 @@ int hws_video_register(struct hws_pcie_dev *dev)
 		vdev->ctrl_handler = &ch->control_handler;
 		vdev->vfl_dir      = VFL_DIR_RX;
 		vdev->release      = video_device_release_empty;
+		if (ch->control_handler.error)
+			goto err_unwind;
 		video_set_drvdata(vdev, ch);
 
 		/* vb2 queue init (dma-contig) */
@@ -951,7 +960,6 @@ int hws_video_register(struct hws_pcie_dev *dev)
 			goto err_unwind;
 		}
 		v4l2_ctrl_handler_setup(&ch->control_handler);
-
 		ret = video_register_device(vdev, VFL_TYPE_VIDEO, -1);
 		if (ret) {
 			dev_err(&dev->pdev->dev,

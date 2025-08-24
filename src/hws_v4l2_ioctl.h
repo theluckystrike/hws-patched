@@ -15,16 +15,25 @@ int vidioc_s_fmt_vid_cap(struct file *file, void *priv, struct v4l2_format *f);
 int hws_vidioc_g_std(struct file *file, void *priv, v4l2_std_id *tvnorms);
 int hws_vidioc_s_std(struct file *file, void *priv, v4l2_std_id tvnorms);
 int hws_vidioc_g_parm(struct file *file, void *fh, struct v4l2_streamparm *setfps);
-int hws_vidioc_enum_framesizes(struct file *file, void *fh, struct v4l2_frmsizeenum *fsize);
 int hws_vidioc_enum_input(struct file *file, void *priv, struct v4l2_input *i);
 int hws_vidioc_g_input(struct file *file, void *priv, unsigned int *i);
 int hws_vidioc_s_input(struct file *file, void *priv, unsigned int i);
 int vidioc_log_status(struct file *file, void *priv);
 int hws_vidioc_g_ctrl(struct file *file, void *fh, struct v4l2_control *a);
 int hws_vidioc_s_ctrl(struct file *file, void *fh, struct v4l2_control *a);
+int hws_vidioc_dv_timings_cap(struct file *file, void *fh,
+			      struct v4l2_dv_timings_cap *cap);
+int hws_vidioc_s_dv_timings(struct file *file, void *fh,
+			    struct v4l2_dv_timings *timings);
 
 int hws_vidioc_queryctrl(struct file *file, void *fh, struct v4l2_queryctrl *a);
-int hws_vidioc_enum_frameintervals(struct file *file, void *fh, struct v4l2_frmivalenum *fival);
 int hws_vidioc_s_parm(struct file *file, void *fh, struct v4l2_streamparm *a);
+int hws_vidioc_g_dv_timings(struct file *file, void *fh,
+			    struct v4l2_dv_timings *timings);
+int hws_vidioc_enum_dv_timings(struct file *file, void *fh,
+			       struct v4l2_enum_dv_timings *edv);
+int hws_vidioc_query_dv_timings(struct file *file, void *fh,
+				struct v4l2_dv_timings *timings);
+int hws_vidioc_s_fmt_vid_cap(struct file *file, void *priv, struct v4l2_format *f);
 
 #endif
