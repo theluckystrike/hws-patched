@@ -3,6 +3,12 @@
 #include <linux/kernel.h>
 #include <linux/overflow.h>
 #include <media/videobuf2-v4l2.h>
+#include <linux/delay.h>             /* udelay */
+#include <linux/bits.h>
+#include <media/v4l2-ioctl.h>        /* video_ioctl2 */
+#include <media/v4l2-ctrls.h>        /* V4L2_CID_DV_RX_* + ctrl API */
+#include <media/v4l2-dev.h>
+#include <media/v4l2-event.h>        /* v4l2_event_queue */
 
 #include <media/videobuf2-core.h>
 #include <media/v4l2-device.h>
@@ -10,6 +16,7 @@
 #include "hws.h"
 #include "hws_reg.h"
 #include "hws_video.h"
+#include "hws_irq.h"
 
 #include <sound/core.h>
 #include <sound/control.h>
@@ -193,12 +200,12 @@ void hws_program_video_from_vb2(struct hws_pcie_dev *hws,
 
 	/* Program capture engine per-channel base/size */
 	writel_relaxed((ch + 1) * PCIEBAR_AXI_BASE + pci_addr,
-		       hws->bar0_base + CBVS_IN_BUF_BASE +
+		       hws->bar0_base + CVBS_IN_BUF_BASE +
 		                      ch * PCIE_BARADDROFSIZE);
 
 	/* If HW uses half-buffer toggling, program half_size (device-specific) */
 	writel_relaxed(hws->video[ch].fmt_curr.half_size / 16,
-		       hws->bar0_base + CBVS_IN_BUF_BASE2 +
+		       hws->bar0_base + CVBS_IN_BUF_BASE2 +
 		                      ch * PCIE_BARADDROFSIZE);
 
 	/* Ensure above posted writes reach the device before capture starts */
@@ -275,6 +282,40 @@ void hws_enable_video_capture(struct hws_pcie_dev *hws,
 		on ? "ON" : "OFF", chan, status);
 }
 
+void hws_init_video_sys(struct hws_pcie_dev *hws, bool enable)
+{
+    int i, j;
+
+    /* If already running and we're not resetting, nothing to do */
+    if (hws->start_run && !enable)
+        return;
+
+    /* 1) reset the decoder mode register to 0 */
+    writel(0x00000000, hws->bar0_base + HWS_REG_DEC_MODE);
+
+    /* 3) on a full reset, clear all per-channel status and indices */
+    if (!enable) {
+        for (i = 0; i < hws->max_channels; i++) {
+            /* helpers to arm/disable capture engines */
+            hws_enable_video_capture(hws, i, false);
+	    // FIXME: use false here
+            hws_enable_audio_capture(hws, i, 0);
+        }
+    }
+
+    /* 4) enable all interrupts */
+    writel(0x003FFFFF, hws->bar0_base + INT_EN_REG_BASE);
+
+    /* 5) “Start run”: set bit31, wait a bit, then program low 24 bits */
+    writel(0x80000000, hws->bar0_base + HWS_REG_DEC_MODE);
+    udelay(500);
+    writel(0x80FFFFFF, hws->bar0_base + HWS_REG_DEC_MODE);
+    writel(0x00000013, hws->bar0_base + HWS_REG_DEC_MODE);
+
+    /* 6) record that we're now running */
+    hws->start_run = true;
+}
+
 static int hws_check_card_status(struct hws_pcie_dev *hws)
 {
 	u32 status;
@@ -311,11 +352,11 @@ void check_video_format(struct hws_pcie_dev *pdx)
 	for (i = 0; i < pdx->cur_max_video_ch; i++) {
 		// FIXME: figure out if we can check update_hpd_status early and exit fast
 		// get_video_status calls -> update_active_and_interlace_flags -> readl 
-		pdx->video[index].signal_loss_cnt = get_video_status(pdx, i);
+		pdx->video[i].signal_loss_cnt = get_video_status(pdx, i);
 
 		/* If we just detected a loss on an active capture channel… */
-		if ((pdx->video[index].signal_loss_cnt  == 0x1) &&
-		    (pdx->video[index].cap_active == true)) {
+		if ((pdx->video[i].signal_loss_cnt  == 0x1) &&
+		    (pdx->video[i].cap_active == true)) {
 		      /* …schedule the “no‐video” handler on the vido_wq workqueue */
 			// FIXME: this is where we can catch if the system has blanked on us
 			// probably need to rewire this, because we removed the videowork
@@ -325,39 +366,6 @@ void check_video_format(struct hws_pcie_dev *pdx)
 	}
 }
 
-void hws_init_video_sys(struct hws_pcie_dev *hws, bool enable)
-{
-    int i, j;
-
-    /* If already running and we're not resetting, nothing to do */
-    if (hws->start_run && !enable)
-        return;
-
-    /* 1) reset the decoder mode register to 0 */
-    writel(0x00000000, hws->bar0_base + HWS_REG_DEC_MODE);
-
-    /* 3) on a full reset, clear all per-channel status and indices */
-    if (!enable) {
-        for (i = 0; i < hws->max_channels; i++) {
-            /* helpers to arm/disable capture engines */
-            hws_enable_video_capture(hws, i, false);
-	    // FIXME: use false here
-            hws_enable_audio_capture(hws, i, 0);
-        }
-    }
-
-    /* 4) enable all interrupts */
-    writel(0x003FFFFF, hws->bar0_base + INT_EN_REG_BASE);
-
-    /* 5) “Start run”: set bit31, wait a bit, then program low 24 bits */
-    writel(0x80000000, hws->bar0_base + HWS_REG_DEC_MODE);
-    udelay(500);
-    writel(0x80FFFFFF, hws->bar0_base + HWS_REG_DEC_MODE);
-    writel(0x00000013, hws->bar0_base + HWS_REG_DEC_MODE);
-
-    /* 6) record that we're now running */
-    hws->start_run = true;
-}
 
 static inline void hws_write_if_diff(struct hws_pcie_dev *hws,
 				     u32 reg_off, u32 new_val)
@@ -393,8 +401,8 @@ static bool update_hpd_status(struct hws_pcie_dev *pdx, unsigned int ch)
     bool hpd_hi = !!(hpd & HWS_HPD_BIT);        /* HPD line asserted   */
 
     /* Cache the +5 V state in V4L2 ctrl core (only when it changes) */
-    if (power != pdx->video[ch].detect_tx_5v_ctrl->cur.val)
-        v4l2_ctrl_s_ctrl(pdx->video[ch].detect_tx_5v_ctrl, power);
+    if (power != pdx->video[ch].detect_tx_5v_control->cur.val)
+        v4l2_ctrl_s_ctrl(pdx->video[ch].detect_tx_5v_control, power);
 
     /* “Signal present” means *both* rails up. Tweak if your HW differs. */
     return power && hpd_hi;
@@ -572,8 +580,8 @@ static void hws_video_apply_mode_change(struct hws_pcie_dev *pdx, unsigned int c
 	/* Program any other per-mode registers here as needed */
     /* Legacy half-buffer length programming required by the DMA engine */
     writel(v->fmt_curr.half_size / 16,
-           pdx->bar0_base + CBVS_IN_BUF_BASE2 + ch * PCIE_BARADDROFSIZE);
-    (void)readl(pdx->bar0_base + CBVS_IN_BUF_BASE2 + ch * PCIE_BARADDROFSIZE);
+           pdx->bar0_base + CVBS_IN_BUF_BASE2 + ch * PCIE_BARADDROFSIZE);
+    (void)readl(pdx->bar0_base + CVBS_IN_BUF_BASE2 + ch * PCIE_BARADDROFSIZE);
 
 	/* 8) Reset per-channel toggles/counters the IRQ uses */
 	WRITE_ONCE(v->last_buf_half_toggle, 0);
@@ -675,6 +683,34 @@ static const struct v4l2_file_operations hws_fops = {
 	.mmap = vb2_fop_mmap,
 };
 
+static int hws_vidioc_querycap(struct file *file, void *priv,
+                               struct v4l2_capability *cap)
+{
+	struct hws_video *vid = video_drvdata(file);
+	struct hws_pcie_dev *hws = vid->parent;
+
+	memset(cap, 0, sizeof(*cap));
+
+	/* Driver and card strings */
+	strscpy(cap->driver, KBUILD_MODNAME, sizeof(cap->driver));
+	snprintf(cap->card, sizeof(cap->card), "%s %u", HWS_VIDEO_NAME,
+	         vid->channel_index);
+
+	/* Bus info: prefer PCI slot name if available */
+	if (hws && hws->pdev)
+		strscpy(cap->bus_info, pci_name(hws->pdev),
+		        sizeof(cap->bus_info));
+	else
+		strscpy(cap->bus_info, "platform:hws",
+		        sizeof(cap->bus_info));
+
+	/* Capabilities */
+	cap->device_caps  = V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_STREAMING;
+	cap->capabilities = cap->device_caps | V4L2_CAP_DEVICE_CAPS;
+
+	return 0;
+}
+
 static const struct v4l2_ioctl_ops hws_ioctl_fops = {
 	.vidioc_querycap = hws_vidioc_querycap,
 	.vidioc_enum_fmt_vid_cap = hws_vidioc_enum_fmt_vid_cap,
@@ -738,7 +774,7 @@ static int hws_queue_setup(struct vb2_queue *q, unsigned int *num_buffers,
 
 	*num_planes   = 1;
 	sizes[0]      = size;
-    v->alloc_sizeimage = size;
+	vid->alloc_sizeimage = size;
 
 	if (alloc_devs)
 		alloc_devs[0] = &hws->pdev->dev; /* dma-contig device */
@@ -757,7 +793,7 @@ static int hws_buffer_prepare(struct vb2_buffer *vb)
 
 	if (vb2_plane_size(vb, 0) < need)
 		return -EINVAL;
-	if (vb2_plane_size(vb, 0) < v->alloc_sizeimage)
+	if (vb2_plane_size(vb, 0) < vid->alloc_sizeimage)
 		return -EINVAL;
 
 	vb2_set_plane_payload(vb, 0, need);
@@ -909,7 +945,7 @@ int hws_video_register(struct hws_pcie_dev *dev)
 		 * Don’t reinitialize any of those here.
 		 */
 
-		vdev = devm_video_device_alloc(&dev->pdev->dev, 0);
+		vdev = devm_video_device_alloc(&dev->pdev->dev);
 		if (!vdev) {
 			dev_err(&dev->pdev->dev, "video_device_alloc ch%u failed\n", i);
 			ret = -ENOMEM;
@@ -1000,15 +1036,15 @@ void hws_video_unregister(struct hws_pcie_dev *dev)
 		/* 2) Drain SW queue + complete in-flight buffer as ERROR. */
 		spin_lock_irqsave(&ch->irq_lock, flags);
 
-		if (ch->cur) {
-			vb2_buffer_done(&ch->cur->vb.vb2_buf, VB2_BUF_STATE_ERROR);
-			ch->cur = NULL;
+		if (ch->active) {
+			vb2_buffer_done(&ch->active->vb.vb2_buf, VB2_BUF_STATE_ERROR);
+			ch->active= NULL;
 		}
 		while (!list_empty(&ch->capture_queue)) {
 			struct hwsvideo_buffer *b =
 				list_first_entry(&ch->capture_queue,
-						 struct hwsvideo_buffer, queue);
-			list_del(&b->queue);
+						 struct hwsvideo_buffer, list);
+			list_del(&b->list);
 			vb2_buffer_done(&b->vb.vb2_buf, VB2_BUF_STATE_ERROR);
 		}
 

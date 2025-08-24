@@ -42,7 +42,7 @@ static int hws_arm_next(struct hws_pcie_dev *hws, u32 ch)
     return 0;
 }
 
-static void hws_bh_video(struct tasklet_struct *t)
+void hws_bh_video(struct tasklet_struct *t)
 {
     struct hws_video *v = from_tasklet(v, t, bh_tasklet);
     struct hws_pcie_dev *hws = v->parent;
