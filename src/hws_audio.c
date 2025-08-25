@@ -1,10 +1,8 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
-#include "hws_audio_pipeline.h"
+#include "hws_audio.h"
 
 #include "hws.h"
 #include "hws_reg.h"
-#include "hws_pci.h"
-#include "hws_init.h"
 
 #include <sound/core.h>
 #include <sound/control.h>

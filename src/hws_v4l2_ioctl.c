@@ -2,9 +2,12 @@
 #include <linux/kernel.h>
 #include <linux/string.h>
 #include <linux/pci.h>
+#include <linux/errno.h>
 #include <media/v4l2-ioctl.h>
 #include <media/v4l2-dev.h>
 #include <media/v4l2-dv-timings.h>
+#include <media/videobuf2-core.h>
+#include <media/videobuf2-v4l2.h>
 #include "hws.h"
 #include "hws_reg.h"
 #include "hws_video.h"
@@ -107,7 +110,7 @@ int hws_vidioc_query_dv_timings(struct file *file, void *fh,
 	m = hws_find_dv_by_wh(vid->pix.width, vid->pix.height,
 			      !!vid->pix.interlaced);
 	if (!m)
-		return -ENODATA; /* no valid/known signal */
+		return -ENOLINK;
 
 	*timings = *m;
 	return 0;
@@ -120,7 +123,7 @@ int hws_vidioc_enum_dv_timings(struct file *file, void *fh,
 	if (!edv)
 		return -EINVAL;
 
-	if (edv->index >= ARRAY_SIZE(hws_dv_modes))
+	if (edv->index >= hws_dv_modes_cnt)
 		return -EINVAL;
 
 	edv->timings = hws_dv_modes[edv->index];
@@ -140,7 +143,7 @@ int hws_vidioc_g_dv_timings(struct file *file, void *fh,
 	m = hws_find_dv_by_wh(vid->pix.width, vid->pix.height,
 			      !!vid->pix.interlaced);
 	if (!m)
-		return -ENODATA;
+		return -ENOLINK;
 
 	*timings = *m;
 	return 0;
@@ -158,6 +161,8 @@ int hws_vidioc_s_dv_timings(struct file *file, void *fh,
 	const struct v4l2_bt_timings *bt;
 	u32 new_w, new_h;
 	bool interlaced;
+	int ret = 0;
+	unsigned long was_busy;
 
 	if (!timings)
 		return -EINVAL;
@@ -171,13 +176,17 @@ int hws_vidioc_s_dv_timings(struct file *file, void *fh,
 	new_h = bt->height;
 	interlaced = !!bt->interlaced;
 
-	/* If vb2 has active buffers and the size changes, do not allow it. */
-	if (vb2_is_busy(&vid->buffer_queue)) {
-		if (new_w != vid->pix.width || new_h != vid->pix.height ||
-		    interlaced != vid->pix.interlaced)
-			return -EBUSY;
-	}
+	/* Serialize against concurrent S_FMT/etc. */
+	mutex_lock(&vid->state_lock);
 
+	/* If vb2 has active buffers and size would change, reject. */
+	was_busy = vb2_is_busy(&vid->buffer_queue);
+	if (was_busy &&
+	    (new_w != vid->pix.width || new_h != vid->pix.height ||
+	     interlaced != vid->pix.interlaced)) {
+		ret = -EBUSY;
+		goto out_unlock;
+	}
 	/* If you want to hard-apply to HW even while idle, call your helper: */
 	/* hws_video_apply_mode_change(vid->parent, vid->channel_index,
 				      new_w, new_h, interlaced); */
@@ -195,14 +204,16 @@ int hws_vidioc_s_dv_timings(struct file *file, void *fh,
 	vid->pix.ycbcr_enc    = V4L2_YCBCR_ENC_DEFAULT;
 	vid->pix.quantization = V4L2_QUANTIZATION_LIM_RANGE;
 	vid->pix.xfer_func    = V4L2_XFER_FUNC_DEFAULT;
+	hws_set_colorimetry(&vid->pix);
 
 	/* Recompute stride/sizeimage/half_size using your helper */
 	vid->pix.bytesperline = hws_calc_bpl_yuyv(new_w);
 	vid->pix.sizeimage    = hws_calc_size_yuyv(new_w, new_h);
-	if (!vb2_is_busy(&vid->buffer_queue))
+	if (!was_busy)
 		vid->alloc_sizeimage = vid->pix.sizeimage;
-
-	return 0;
+out_unlock:
+	mutex_unlock(&vid->state_lock);
+	return ret;
 }
 
 /* Report DV timings capability: advertise BT.656/1120 with
@@ -220,12 +231,14 @@ int hws_vidioc_dv_timings_cap(struct file *file, void *fh,
 
 	memset(cap, 0, sizeof(*cap));
 	cap->type = V4L2_DV_BT_656_1120;
+	size_t n = 0;
 
 	for (i = 0; i < ARRAY_SIZE(hws_dv_modes); i++) {
 		const struct v4l2_bt_timings *bt = &hws_dv_modes[i].bt;
 
 		if (hws_dv_modes[i].type != V4L2_DV_BT_656_1120)
 			continue;
+		n++;
 
 		if (bt->width  < min_w) min_w = bt->width;
 		if (bt->height < min_h) min_h = bt->height;
@@ -234,7 +247,7 @@ int hws_vidioc_dv_timings_cap(struct file *file, void *fh,
 	}
 
 	/* If the table was empty, fail gracefully. */
-	if (!ARRAY_SIZE(hws_dv_modes) || min_w == U32_MAX)
+	if (!n || min_w == U32_MAX)
 		return -ENODATA;
 
 	cap->bt.min_width  = min_w;
@@ -252,58 +265,6 @@ int hws_vidioc_dv_timings_cap(struct file *file, void *fh,
 	/* Leave pixelclock/porch limits unconstrained (0) for now. */
 	return 0;
 }
-
-
-
-static struct v4l2_queryctrl g_hws_ctrls[] = {
-	{
-		V4L2_CID_BRIGHTNESS, //id
-		V4L2_CTRL_TYPE_INTEGER, //type
-		"Brightness", //name[32]
-		MIN_VAMP_BRIGHTNESS_UNITS, //minimum
-		MAX_VAMP_BRIGHTNESS_UNITS, //maximum
-		1, //step
-		BrightnessDefault, //default_value
-		0, //flags
-		{ 0, 0 }, //reserved[2]
-	},
-	{
-		V4L2_CID_CONTRAST, //id
-		V4L2_CTRL_TYPE_INTEGER, //type
-		"Contrast", //name[32]
-		MIN_VAMP_CONTRAST_UNITS, //minimum
-		MAX_VAMP_CONTRAST_UNITS, //maximum
-		1, //step
-		ContrastDefault, //default_value
-		0, //flags
-		{ 0, 0 }, //reserved[2]
-	},
-	{
-		V4L2_CID_SATURATION, //id
-		V4L2_CTRL_TYPE_INTEGER, //type
-		"Saturation", //name[32]
-		MIN_VAMP_SATURATION_UNITS, //minimum
-		MAX_VAMP_SATURATION_UNITS, //maximum
-		1, //step
-		SaturationDefault, //default_value
-		0, //flags
-		{ 0, 0 }, //reserved[2]
-	},
-	{
-		V4L2_CID_HUE, //id
-		V4L2_CTRL_TYPE_INTEGER, //type
-		"Hue", //name[32]
-		MIN_VAMP_HUE_UNITS, //minimum
-		MAX_VAMP_HUE_UNITS, //maximum
-		1, //step
-		HueDefault, //default_value
-		0, //flags
-		{ 0, 0 }, //reserved[2]
-	},
-};
-
-#define ARRAY_SIZE_OF_CTRL (sizeof(g_hws_ctrls) / sizeof(g_hws_ctrls[0]))
-
 
 static int hws_g_volatile_ctrl(struct v4l2_ctrl *ctrl)
 {
@@ -365,45 +326,6 @@ static const struct v4l2_ctrl_ops hws_ctrl_ops = {
 	.g_volatile_ctrl = hws_g_volatile_ctrl,
 };
 
-/* ============================= */
-/*   per-channel ctrl init       */
-/* ============================= */
-static int hws_ctrls_init(struct hws_video *vid)
-{
-	struct v4l2_ctrl_handler *hdl = &vid->control_handler;
-
-	/* Create BCHS + one DV status control */
-	v4l2_ctrl_handler_init(hdl, 5);
-
-	vid->ctrl_brightness = v4l2_ctrl_new_std(hdl, &hws_ctrl_ops,
-		V4L2_CID_BRIGHTNESS,
-		MIN_VAMP_BRIGHTNESS_UNITS, MAX_VAMP_BRIGHTNESS_UNITS, 1, BrightnessDefault);
-
-	vid->ctrl_contrast = v4l2_ctrl_new_std(hdl, &hws_ctrl_ops,
-		V4L2_CID_CONTRAST,
-		MIN_VAMP_CONTRAST_UNITS, MAX_VAMP_CONTRAST_UNITS, 1, ContrastDefault);
-
-	vid->ctrl_saturation = v4l2_ctrl_new_std(hdl, &hws_ctrl_ops,
-		V4L2_CID_SATURATION,
-		MIN_VAMP_SATURATION_UNITS, MAX_VAMP_SATURATION_UNITS, 1, SaturationDefault);
-
-	vid->ctrl_hue = v4l2_ctrl_new_std(hdl, &hws_ctrl_ops,
-		V4L2_CID_HUE,
-		MIN_VAMP_HUE_UNITS, MAX_VAMP_HUE_UNITS, 1, HueDefault);
-
-	vid->detect_tx_5v_control = v4l2_ctrl_new_std(hdl, &hws_ctrl_ops,
-		V4L2_CID_DV_RX_POWER_PRESENT, 0, 1, 1, 0);
-	if (vid->detect_tx_5v_control)
-		vid->detect_tx_5v_control->flags |=
-			V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_READ_ONLY;
-
-	if (hdl->error) {
-		int err = hdl->error;
-		v4l2_ctrl_handler_free(hdl);
-		return err;
-	}
-	return 0;
-}
 
 
 int hws_vidioc_querycap(struct file *file, void *priv, struct v4l2_capability *cap)
@@ -451,6 +373,15 @@ int hws_vidioc_g_fmt_vid_cap(struct file *file, void *fh, struct v4l2_format *fm
 	return 0;
 }
 
+static inline void hws_set_colorimetry(struct v4l2_pix_format *p)
+{
+	bool sd = p->height <= 576;
+	p->colorspace   = sd ? V4L2_COLORSPACE_SMPTE170M : V4L2_COLORSPACE_REC709;
+	p->ycbcr_enc    = V4L2_YCBCR_ENC_DEFAULT;
+	p->quantization = V4L2_QUANTIZATION_LIM_RANGE;
+	p->xfer_func    = V4L2_XFER_FUNC_DEFAULT;
+}
+
 int hws_vidioc_try_fmt_vid_cap(struct file *file, void *fh, struct v4l2_format *f)
 {
 	struct v4l2_pix_format *pix = &f->fmt.pix;
@@ -470,10 +401,8 @@ int hws_vidioc_try_fmt_vid_cap(struct file *file, void *fh, struct v4l2_format *
 	pix->field        = V4L2_FIELD_NONE;
 	pix->bytesperline = hws_calc_bpl_yuyv(pix->width);
 	pix->sizeimage    = hws_calc_size_yuyv(pix->width, pix->height);
-	pix->colorspace   = V4L2_COLORSPACE_REC709;
-	pix->ycbcr_enc    = V4L2_YCBCR_ENC_DEFAULT;
-	pix->quantization = V4L2_QUANTIZATION_LIM_RANGE;
 	pix->xfer_func    = V4L2_XFER_FUNC_DEFAULT;
+	hws_set_colorimetry(pix);
 	return 0;
 }
 
@@ -482,18 +411,20 @@ int hws_vidioc_s_fmt_vid_cap(struct file *file, void *priv, struct v4l2_format *
 	struct hws_video *vid = video_drvdata(file);
 	int ret;
 
+	mutex_lock(&vid->state_lock);
+
 	if (f->type != V4L2_BUF_TYPE_VIDEO_CAPTURE) return -EINVAL;
 
 	/* Normalize the request */
 	ret = hws_vidioc_try_fmt_vid_cap(file, priv, f);
-	if (ret) return ret;
+	if (ret) { mutex_unlock(&vid->state_lock); return ret; }
 
 	/* Don’t allow size changes while buffers are queued */
 	if (vb2_is_busy(&vid->buffer_queue)) {
 		if (f->fmt.pix.width       != vid->pix.width  ||
 		    f->fmt.pix.height      != vid->pix.height ||
 		    f->fmt.pix.pixelformat != V4L2_PIX_FMT_YUYV)
-			return -EBUSY;
+			{ mutex_unlock(&vid->state_lock); return -EBUSY; }
 	}
 
 	/* Apply to driver state */
@@ -518,7 +449,7 @@ int hws_vidioc_s_fmt_vid_cap(struct file *file, void *priv, struct v4l2_format *
 	/* Refresh vb2 watermark when idle */
 	if (!vb2_is_busy(&vid->buffer_queue))
 		vid->alloc_sizeimage = vid->pix.sizeimage;
-
+	mutex_unlock(&vid->state_lock);
 	return 0;
 }
 
@@ -527,8 +458,6 @@ int hws_vidioc_g_parm(struct file *file, void *fh, struct v4l2_streamparm *param
 	struct hws_video *vid = video_drvdata(file);
 
 	if (param->type != V4L2_BUF_TYPE_VIDEO_CAPTURE) {
-		dev_err(&vid->parent->pdev->dev, "%s: unsupported type %d\n",
-			__func__, param->type);
 		return -EINVAL;
 	}
 
@@ -546,16 +475,8 @@ int hws_vidioc_g_parm(struct file *file, void *fh, struct v4l2_streamparm *param
 int hws_vidioc_enum_input(struct file *file, void *priv,
 				 struct v4l2_input *input)
 {
-	struct hws_video *video = video_drvdata(file);
-	unsigned int      idx   = input->index;
-
-	if (idx != 0) {
-		dev_err(&video->parent->pdev->dev,
-                 "%s: invalid input index %u\n",
-                 __func__, idx);
+	if (input->index)
 		return -EINVAL;
-	}
-
     input->type         = V4L2_INPUT_TYPE_CAMERA;
     strscpy(input->name, KBUILD_MODNAME, sizeof(input->name));
     input->capabilities = V4L2_IN_CAP_DV_TIMINGS;

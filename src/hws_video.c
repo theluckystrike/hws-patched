@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include <linux/pci.h>
+#include <linux/errno.h>
 #include <linux/kernel.h>
 #include <linux/overflow.h>
 #include <media/videobuf2-v4l2.h>
@@ -35,6 +36,45 @@ static void handle_hwv2_path(struct hws_pcie_dev *hws, unsigned int ch);
 static void handle_legacy_path(struct hws_pcie_dev *hws, unsigned int ch);
 static u32 hws_calc_sizeimage(struct hws_video *v, u16 w, u16 h, bool interlaced);
 
+/* ============================= */
+/*   per-channel ctrl init       */
+/* ============================= */
+static int hws_ctrls_init(struct hws_video *vid)
+{
+	struct v4l2_ctrl_handler *hdl = &vid->control_handler;
+
+	/* Create BCHS + one DV status control */
+	v4l2_ctrl_handler_init(hdl, 5);
+
+	vid->ctrl_brightness = v4l2_ctrl_new_std(hdl, &hws_ctrl_ops,
+		V4L2_CID_BRIGHTNESS,
+		MIN_VAMP_BRIGHTNESS_UNITS, MAX_VAMP_BRIGHTNESS_UNITS, 1, BrightnessDefault);
+
+	vid->ctrl_contrast = v4l2_ctrl_new_std(hdl, &hws_ctrl_ops,
+		V4L2_CID_CONTRAST,
+		MIN_VAMP_CONTRAST_UNITS, MAX_VAMP_CONTRAST_UNITS, 1, ContrastDefault);
+
+	vid->ctrl_saturation = v4l2_ctrl_new_std(hdl, &hws_ctrl_ops,
+		V4L2_CID_SATURATION,
+		MIN_VAMP_SATURATION_UNITS, MAX_VAMP_SATURATION_UNITS, 1, SaturationDefault);
+
+	vid->ctrl_hue = v4l2_ctrl_new_std(hdl, &hws_ctrl_ops,
+		V4L2_CID_HUE,
+		MIN_VAMP_HUE_UNITS, MAX_VAMP_HUE_UNITS, 1, HueDefault);
+
+	vid->detect_tx_5v_control = v4l2_ctrl_new_std(hdl, &hws_ctrl_ops,
+		V4L2_CID_DV_RX_POWER_PRESENT, 0, 1, 1, 0);
+	if (vid->detect_tx_5v_control)
+		vid->detect_tx_5v_control->flags |=
+			V4L2_CTRL_FLAG_VOLATILE | V4L2_CTRL_FLAG_READ_ONLY;
+
+	if (hdl->error) {
+		int err = hdl->error;
+		v4l2_ctrl_handler_free(hdl);
+		return err;
+	}
+	return 0;
+}
 /* ─────────────────────────────────────────────────────────── */
 /* Per-video-channel initialisation                            */
 int hws_video_init_channel(struct hws_pcie_dev *pdev, int ch)
@@ -289,7 +329,7 @@ void hws_enable_video_capture(struct hws_pcie_dev *hws,
 
 void hws_init_video_sys(struct hws_pcie_dev *hws, bool enable)
 {
-    int i, j;
+    int i;
 
     /* If already running and we're not resetting, nothing to do */
     if (hws->start_run && !enable)
@@ -638,11 +678,22 @@ static void update_live_resolution(struct hws_pcie_dev *pdx, unsigned int ch)
 
 static int hws_open(struct file *file)
 {
-    struct hws_video *vid = video_drvdata(file);
+    int ret;
+    struct hws_video *vid;
+
+    /* Create V4L2 file handle so events & priorities work */
+    ret = v4l2_fh_open(file);
+    if (ret)
+        return ret;
+
+    vid = video_drvdata(file);
 
     /* Hard-fail additional opens while a capture is active */
     if (!v4l2_fh_is_singular_file(file) && vb2_is_busy(&vid->buffer_queue))
+    {
+        v4l2_fh_release(file);
         return -EBUSY;
+    }
 
     return 0;
 }
@@ -661,6 +712,19 @@ static const struct v4l2_file_operations hws_fops = {
 	.unlocked_ioctl = video_ioctl2,
 	.mmap = vb2_fop_mmap,
 };
+
+static int hws_subscribe_event(struct v4l2_fh *fh,
+			       const struct v4l2_event_subscription *sub)
+{
+	switch (sub->type) {
+	case V4L2_EVENT_SOURCE_CHANGE:
+		return v4l2_src_change_event_subscribe(fh, sub);
+	case V4L2_EVENT_CTRL:
+		return v4l2_ctrl_subscribe_event(fh, sub);
+	default:
+		return -EINVAL;
+	}
+}
 
 static const struct v4l2_ioctl_ops hws_ioctl_fops = {
 	/* Core caps/info */
@@ -695,7 +759,7 @@ static const struct v4l2_ioctl_ops hws_ioctl_fops = {
 	.vidioc_dv_timings_cap    = hws_vidioc_dv_timings_cap,
 
 	.vidioc_log_status = vidioc_log_status,
-	.vidioc_subscribe_event = v4l2_ctrl_subscribe_event,
+	.vidioc_subscribe_event = hws_subscribe_event,
 	.vidioc_unsubscribe_event = v4l2_event_unsubscribe,
 	.vidioc_g_parm = hws_vidioc_g_parm,
 	.vidioc_s_parm = hws_vidioc_s_parm,
@@ -724,7 +788,7 @@ static int hws_queue_setup(struct vb2_queue *q, unsigned int *num_buffers,
 {
 	struct hws_video *vid = q->drv_priv;
 	struct hws_pcie_dev *hws = vid->parent;
-	size_t size, tmp;
+	size_t size;
 
 	/* One plane: YUYV (2 bytes/pixel). Use current programmed OUT WxH. */
 	if (check_mul_overflow(vid->pix.width, vid->pix.height, &tmp) ||
@@ -732,6 +796,13 @@ static int hws_queue_setup(struct vb2_queue *q, unsigned int *num_buffers,
 		return -EOVERFLOW;
 
 	size = PAGE_ALIGN(size);
+	/* One plane: use current sizeimage (bytesperline * height) */
+	size = vid->pix.sizeimage;
+	if (!size) {
+		vid->pix.bytesperline = ALIGN(vid->pix.width * 2, 64);
+		vid->pix.sizeimage    = vid->pix.bytesperline * vid->pix.height;
+		size = vid->pix.sizeimage;
+	}
 
 	if (*num_planes) {
 		if (sizes[0] < size)
@@ -756,9 +827,7 @@ static int hws_queue_setup(struct vb2_queue *q, unsigned int *num_buffers,
 static int hws_buffer_prepare(struct vb2_buffer *vb)
 {
 	struct hws_video *vid = vb->vb2_queue->drv_priv;
-	size_t need = (size_t)vid->pix.width * vid->pix.height * 2;
-	if (vb2_plane_size(vb, 0) < need)
-		return -EINVAL;
+	size_t need = vid->pix.sizeimage;
 	if (vb2_plane_size(vb, 0) < vid->alloc_sizeimage)
 		return -EINVAL;
 
@@ -1038,7 +1107,6 @@ void hws_video_unregister(struct hws_pcie_dev *dev)
 			video_device_release(ch->video_device);
 		    ch->video_device = NULL;
 		}
-		v4l2_device_unregister(&dev->v4l2_device);
 		/* 6) Reset lightweight state (optional). */
 		ch->cap_active      = false;
 		ch->stop_requested  = false;
@@ -1047,5 +1115,6 @@ void hws_video_unregister(struct hws_pcie_dev *dev)
 		ch->signal_loss_cnt = 0;
 		INIT_LIST_HEAD(&ch->capture_queue);
 	}
+	v4l2_device_unregister(&dev->v4l2_device);
 }
 
