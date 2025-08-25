@@ -14,6 +14,7 @@ EXTRA_LDFLAGS += -S
 
 # -------- Extra compile flags for every obj in this makefile ----------
 ccflags-y += -fdump-ipa-cgraph -fno-ipa-icf -w
+ccflags-y += -fdump-tree-gimple
 ccflags-y += -I$(src)
 
 ifneq ($(KERNELRELEASE),)
