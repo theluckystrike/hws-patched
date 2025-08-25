@@ -7,7 +7,7 @@ HwsCapture-objs := \
 	 hws_v4l2_ioctl.o \
 	 hws_audio.o 
 
-src := $(PWD)
+src := $(CURDIR)
 
 EXTRA_CFLAGS += -I$(src)
 EXTRA_LDFLAGS += -S
@@ -23,7 +23,7 @@ KERNELDIR ?= /lib/modules/$(shell uname -r)/build
 endif
 
 all:
-	$(MAKE) -C $(KERNELDIR) M=$(PWD) modules
+	$(MAKE) -C $(KERNELDIR) M=$(CURDIR) modules
 
 install:
 	$(MAKE) -C $(KERNELDIR) M=$(PWD) modules_install
