@@ -10,6 +10,7 @@ void hws_enable_video_capture(struct hws_pcie_dev *hws,
 int hws_video_init_channel(struct hws_pcie_dev *pdev, int ch);
 void hws_video_cleanup_channel(struct hws_pcie_dev *pdev, int ch);
 void check_video_format(struct hws_pcie_dev *pdx);
+int hws_check_card_status(struct hws_pcie_dev *hws);
 
 void hws_program_video_from_vb2(struct hws_pcie_dev *hws,
                                        unsigned int ch,

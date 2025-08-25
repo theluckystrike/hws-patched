@@ -361,7 +361,7 @@ void hws_init_video_sys(struct hws_pcie_dev *hws, bool enable)
     hws->start_run = true;
 }
 
-static int hws_check_card_status(struct hws_pcie_dev *hws)
+int hws_check_card_status(struct hws_pcie_dev *hws)
 {
 	u32 status;
 

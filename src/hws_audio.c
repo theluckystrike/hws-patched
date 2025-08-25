@@ -31,10 +31,37 @@ static const struct snd_pcm_hardware audio_pcm_hardware = {
 	.periods_max = 255,
 };
 
-void hws_audio_hw_stop(struct hws_pcie_dev *hws, unsigned int ch);
-static inline bool hws_check_audio_capture(struct hws_pcie_dev *hws, unsigned int ch);
-void hws_stop_audio_capture(struct hws_pcie_dev *hws, unsigned int ch);
 
+void hws_audio_hw_stop(struct hws_pcie_dev *hws, unsigned int ch)
+{
+	if (!hws || ch >= hws->cur_max_linein_ch)
+		return;
+
+	/* Disable the channel */
+	hws_enable_audio_capture(hws, ch, false);
+
+	/* Flush posted write */
+	readl(hws->bar0_base + HWS_REG_INT_STATUS);
+
+	/* Ack any latched ADONE so we don't get re-triggers */
+	{
+		u32 abit = HWS_INT_ADONE_BIT(ch);
+		u32 st = readl(hws->bar0_base + HWS_REG_INT_STATUS);
+		if (st & abit) {
+			writel(abit, hws->bar0_base + HWS_REG_INT_ACK);
+			readl(hws->bar0_base + HWS_REG_INT_STATUS);
+		}
+	}
+}
+
+// FIXME: wants the rel HW write pointer
+size_t hws_audio_dma_wptr_bytes(struct hws_pcie_dev *hws, unsigned int ch)
+{
+	if (!hws || ch >= hws->cur_max_linein_ch)
+		return 0;
+
+	return (size_t)hws->audio[ch].next_period * hws->audio[ch].period_bytes;
+}
 
 void hws_audio_program_next_period(struct hws_pcie_dev *hws, unsigned int ch)
 {
@@ -172,6 +199,12 @@ void hws_audio_cleanup_channel(struct hws_pcie_dev *pdev, int ch, bool device_re
 	aud->period_bytes       = 0;
 }
 
+static inline bool hws_check_audio_capture(struct hws_pcie_dev *hws, unsigned int ch)
+{
+	u32 reg = readl(hws->bar0_base + HWS_REG_ACAP_ENABLE);
+	return !!(reg & BIT(ch));
+}
+
 int hws_start_audio_capture(struct hws_pcie_dev *hws, unsigned int ch)
 {
     int ret;
@@ -216,6 +249,7 @@ static inline void hws_audio_ack_pending(struct hws_pcie_dev *hws, unsigned int 
         readl(hws->bar0_base + HWS_REG_INT_STATUS);
     }
 }
+
 
 static inline void hws_audio_ack_all(struct hws_pcie_dev *hws)
 {
@@ -275,12 +309,6 @@ void hws_enable_audio_capture(struct hws_pcie_dev *hws,
 		enable ? "enabled" : "disabled", ch, reg);
 }
 
-static inline bool hws_check_audio_capture(struct hws_pcie_dev *hws, unsigned int ch)
-{
-	u32 reg = readl(hws->bar0_base + HWS_REG_ACAP_ENABLE);
-	return !!(reg & BIT(ch));
-}
-
 static snd_pcm_uframes_t hws_pcie_audio_pointer(struct snd_pcm_substream *substream)
 {
 	struct hws_audio *a = snd_pcm_substream_chip(substream);
@@ -336,11 +364,6 @@ int hws_pcie_audio_prepare(struct snd_pcm_substream *substream)
 	a->period_bytes = frames_to_bytes(rt, rt->period_size);
 	a->periods      = rt->periods;
 	a->next_period  = 0;
-
-	/* Program base/ring and format (device-specific hooks you already have) */
-	hws_prog_dma_base(hws, ch, rt->dma_addr, rt->dma_bytes);
-	hws_prog_dma_period(hws, ch, a->period_bytes);
-	hws_prog_audio_fmt(hws, ch, 48000, 2, SNDRV_PCM_FORMAT_S16_LE);
 
 	/* Optional: clear HW toggle readback */
 	a->last_period_toggle = 0;

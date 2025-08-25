@@ -330,7 +330,7 @@ static int hws_s_ctrl(struct v4l2_ctrl *ctrl)
 	return 0;
 }
 
-static const struct v4l2_ctrl_ops hws_ctrl_ops = {
+const struct v4l2_ctrl_ops hws_ctrl_ops = {
 	.s_ctrl          = hws_s_ctrl,
 	.g_volatile_ctrl = hws_g_volatile_ctrl,
 };
