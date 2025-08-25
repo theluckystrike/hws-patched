@@ -139,14 +139,107 @@ def extract_or_load_f1(repo: Path, commit: str) -> Dict:
     finally:
         cleanup_worktree(repo, wt)
 
-def diff_f1(base: Dict, tgt: Dict) -> Tuple[List, List, List]:
+def diff_f1(base: Dict, tgt: Dict) -> Tuple[List[str], List[str], List[str], List[Tuple[str, str]]]:
+    """
+    Return:
+      added    – new IDs (path::name) not present in baseline
+      removed  – IDs that disappeared entirely
+      sigchg   – IDs whose signature text changed in-place
+      moved    – list of (old_id, new_id) for functions that kept the same
+                 name & signature but moved files (path changed)
+    """
     bmap = {f["id"]: f for f in base["functions"]}
     tmap = {f["id"]: f for f in tgt["functions"]}
-    added   = [fid for fid in tmap if fid not in bmap]
-    removed = [fid for fid in bmap if fid not in tmap]
-    sigchg  = [fid for fid in tmap.keys() & bmap.keys()
-               if tmap[fid]["signature"] != bmap[fid]["signature"]]
-    return added, removed, sigchg
+
+    # Basic deltas
+    added_ids   = [fid for fid in tmap if fid not in bmap]
+    removed_ids = [fid for fid in bmap if fid not in tmap]
+    sigchg      = [fid for fid in tmap.keys() & bmap.keys()
+                   if tmap[fid].get("signature") != bmap[fid].get("signature")]
+
+    # Build lookup for removed by (name, signature) and by (name) for fallback
+    def k_name_sig(fn: Dict) -> Tuple[str, str | None]:
+        return (fn["name"], fn.get("signature"))
+
+    rem_by_name_sig: Dict[Tuple[str, str | None], List[str]] = defaultdict(list)
+    rem_by_name: Dict[str, List[str]] = defaultdict(list)
+    for rid in removed_ids:
+        rf = bmap[rid]
+        rem_by_name_sig[k_name_sig(rf)].append(rid)
+        rem_by_name[rf["name"]].append(rid)
+
+    moved: List[Tuple[str, str]] = []
+    used_removed: Set[str] = set()
+    used_added: Set[str] = set()
+
+    # Try to pair each add with exactly one removed that shares name+sig (preferred)
+    # or name-only (fallback) to classify as "moved".
+    for aid in added_ids:
+        tf = tmap[aid]
+        key_ns = k_name_sig(tf)
+        cand = rem_by_name_sig.get(key_ns, [])
+        chosen: str | None = None
+
+        if len(cand) == 1:
+            chosen = cand[0]
+        elif len(cand) == 0:
+            # Fallback: try unique name-only match (avoid ambiguity)
+            cand2 = rem_by_name.get(tf["name"], [])
+            if len(cand2) == 1:
+                # Only accept as "moved" if signatures are both None or equal
+                rf = bmap[cand2[0]]
+                if rf.get("signature") == tf.get("signature"):
+                    chosen = cand2[0]
+
+        if chosen:
+            moved.append((chosen, aid))
+            used_removed.add(chosen)
+            used_added.add(aid)
+
+    real_added   = [fid for fid in added_ids   if fid not in used_added]
+    real_removed = [fid for fid in removed_ids if fid not in used_removed]
+
+    return real_added, real_removed, sigchg, moved
+
+
+def pretty_diff_f1(added, removed, changed, moved, base_ir, tgt_ir):
+    base_lookup = {f["id"]: f for f in base_ir["functions"]}
+    tgt_lookup  = {f["id"]: f for f in tgt_ir["functions"]}
+
+    print("\n### Phase 1 – Function-level delta vs BASE0\n")
+
+    if added:
+        print("**Added:**")
+        for fid in added:
+            f = tgt_lookup.get(fid, {})
+            print(f"  • {f.get('name', fid)} ({f.get('file','?')}:{f.get('line','?')})")
+        print()
+
+    if removed:
+        print("**Removed:**")
+        for fid in removed:
+            print(f"  • {fid}")
+        print()
+
+    if moved:
+        print("**Moved:**")
+        for old_id, new_id in moved:
+            old = base_lookup.get(old_id, {})
+            new = tgt_lookup.get(new_id,  {})
+            name = new.get("name") or old.get("name") or new_id.split("::",1)[-1]
+            print(f"  • {name}: {old.get('file','?')} → {new.get('file','?')}")
+        print()
+
+    if changed:
+        print("**Signature changed:**")
+        for fid in changed:
+            f = tgt_lookup.get(fid, {})
+            print(f"  • {f.get('name', fid)} ({f.get('file','?')}:{f.get('line','?')})")
+        print()
+
+    if not (added or removed or moved or changed):
+        print("No public-symbol deltas detected.\n")
+
 
 def build_alias_map(base: Dict, tgt: Dict) -> Dict[str, str]:
     """
@@ -166,28 +259,6 @@ def build_alias_map(base: Dict, tgt: Dict) -> Dict[str, str]:
             alias[f["id"]] = b_id
     return alias
 
-def pretty_diff_f1(added, removed, changed, tgt_ir):
-    lookup = {f["id"]: f for f in tgt_ir["functions"]}
-    print("\n### Phase 1 – Function‑level delta vs BASE0\n")
-    if added:
-        print("**Added:**")
-        for fid in added:
-            f = lookup.get(fid, {})
-            print(f"  • {f.get('name', fid)} ({f.get('file','?')}:{f.get('line','?')})")
-        print()
-    if removed:
-        print("**Removed:**")
-        for fid in removed:
-            print(f"  • {fid}")
-        print()
-    if changed:
-        print("**Signature changed:**")
-        for fid in changed:
-            f = lookup.get(fid, {})
-            print(f"  • {f.get('name', fid)} ({f.get('file','?')}:{f.get('line','?')})")
-        print()
-    if not (added or removed or changed):
-        print("No public‑symbol deltas detected.\n")
 
 CLANG_BASE_ARGS = ["-fsyntax-only",
                    "-Xclang", "-analyzer-checker=debug.DumpCallGraph"]
@@ -404,8 +475,8 @@ def main() -> None:
     # Phase‑1
     base_f1 = extract_or_load_f1(repo, baseline_sha)
     tgt_f1  = extract_or_load_f1(repo, target_sha)
-    added, removed, sigchg = diff_f1(base_f1, tgt_f1)
-    pretty_diff_f1(added, removed, sigchg, tgt_f1)
+    added, removed, sigchg, moved = diff_f1(base_f1, tgt_f1)
+    pretty_diff_f1(added, removed, sigchg, moved, base_f1, tgt_f1)
 
     # Alias map for renames
     alias = build_alias_map(base_f1, tgt_f1)
