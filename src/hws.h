@@ -11,6 +11,7 @@
 #include <linux/workqueue.h>
 #include <linux/sizes.h>
 
+#include <sound/core.h>
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-device.h>
 #include <media/videobuf2-dma-sg.h>
@@ -199,6 +200,8 @@ struct hws_pcie_dev {
 
 	/* ───── V4L2 framework objects ───── */
 	struct v4l2_device		 v4l2_device;
+
+	struct snd_card            *snd_card;
 
 	/* ───── kernel thread ───── */
 	struct task_struct        *main_task;

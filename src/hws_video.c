@@ -788,7 +788,7 @@ static int hws_queue_setup(struct vb2_queue *q, unsigned int *num_buffers,
 {
 	struct hws_video *vid = q->drv_priv;
 	struct hws_pcie_dev *hws = vid->parent;
-	size_t size;
+	size_t size, tmp;
 
 	/* One plane: YUYV (2 bytes/pixel). Use current programmed OUT WxH. */
 	if (check_mul_overflow(vid->pix.width, vid->pix.height, &tmp) ||

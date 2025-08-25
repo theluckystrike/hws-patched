@@ -5,10 +5,12 @@
 #include "hws_reg.h"
 
 #include <sound/core.h>
+#include <sound/pcm_params.h>
 #include <sound/control.h>
 #include <sound/pcm.h>
 #include <sound/rawmidi.h>
 #include <sound/initval.h>
+#include "hws_video.h"
 
 extern size_t hws_audio_dma_wptr_bytes(struct hws_pcie_dev *hws, unsigned int ch);
 
@@ -28,6 +30,10 @@ static const struct snd_pcm_hardware audio_pcm_hardware = {
 	.periods_min = 2,
 	.periods_max = 255,
 };
+
+void hws_audio_hw_stop(struct hws_pcie_dev *hws, unsigned int ch);
+static inline bool hws_check_audio_capture(struct hws_pcie_dev *hws, unsigned int ch);
+void hws_stop_audio_capture(struct hws_pcie_dev *hws, unsigned int ch);
 
 
 void hws_audio_program_next_period(struct hws_pcie_dev *hws, unsigned int ch)
@@ -64,7 +70,7 @@ void hws_audio_program_next_period(struct hws_pcie_dev *hws, unsigned int ch)
 	bar_low_masked     = (addr_low & PCI_E_BAR_ADD_MASK);    /* into table LOW */
 
 	/* Legacy address-table layout: start 0x208, step 8 per channel */
-	table_off = (0x208u + (ch * 8u));
+	table_off = 0x208u + (ch * 8u);
 
 	/* 1) Program PCIe address table: HIGH (0) then LOW (BAR-masked) */
 	writel(addr_high, hws->bar0_base + (PCI_ADDR_TABLE_BASE + table_off));
@@ -78,7 +84,7 @@ void hws_audio_program_next_period(struct hws_pcie_dev *hws, unsigned int ch)
 	/* 2) Program AXI-visible base for AUDIO slot (8 + ch) */
 	axi_index = 8u + ch;
 	writel(((ch + 1u) * PCIEBAR_AXI_BASE) + pci_addr_lowmasked,
-	       hws->bar0_base + (CVBS_IN_BUF_BASE + (axi_index * PCIE_BARADDROFSIZE)));
+	       hws->bar0_base + CVBS_IN_BUF_BASE + (axi_index * PCIE_BARADDROFSIZE));
 
 	/* 3) Program period length (legacy: bytes/16 granularity) */
 	length_units = (a->period_bytes / 16u);
@@ -214,7 +220,7 @@ static inline void hws_audio_ack_pending(struct hws_pcie_dev *hws, unsigned int 
 static inline void hws_audio_ack_all(struct hws_pcie_dev *hws)
 {
     u32 mask = 0;
-    for (unsigned int ch = 0; ch < hws->cur_max_linein_ch; ++ch)
+    for (unsigned int ch = 0; ch < hws->cur_max_linein_ch; ch++)
         mask |= HWS_INT_ADONE_BIT(ch);
     if (mask) {
         writel(mask, hws->bar0_base + HWS_REG_INT_ACK);
@@ -222,7 +228,7 @@ static inline void hws_audio_ack_all(struct hws_pcie_dev *hws)
     }
 }
 
-static void hws_stop_audio_capture(struct hws_pcie_dev *hws, unsigned int ch)
+void hws_stop_audio_capture(struct hws_pcie_dev *hws, unsigned int ch)
 {
     if (!hws || ch >= hws->cur_max_linein_ch)
         return;
@@ -294,7 +300,9 @@ int hws_pcie_audio_open(struct snd_pcm_substream *substream)
 	rt->hw = audio_pcm_hardware;
 	a->pcm_substream = substream;
 
+	snd_pcm_hw_constraint_integer(rt, SNDRV_PCM_HW_PARAM_PERIODS);
 	snd_pcm_hw_constraint_step(rt, 0, SNDRV_PCM_HW_PARAM_PERIOD_BYTES, 32);
+	snd_pcm_hw_constraint_step(rt, 0, SNDRV_PCM_HW_PARAM_BUFFER_BYTES, 32);
 	return 0;
 }
 
@@ -366,14 +374,16 @@ int hws_pcie_audio_trigger(struct snd_pcm_substream *substream, int cmd)
 	}
 }
 
-struct snd_pcm_ops hws_pcie_pcm_ops = { .open = hws_pcie_audio_open,
-					.close = hws_pcie_audio_close,
-					.ioctl = snd_pcm_lib_ioctl,
-					.hw_params = hws_pcie_audio_hw_params,
-					.hw_free = hws_pcie_audio_hw_free,
-					.prepare = hws_pcie_audio_prepare,
-					.trigger = hws_pcie_audio_trigger,
-					.pointer = hws_pcie_audio_pointer };
+static const struct snd_pcm_ops hws_pcie_pcm_ops = {
+	.open      = hws_pcie_audio_open,
+	.close     = hws_pcie_audio_close,
+	.ioctl     = snd_pcm_lib_ioctl,
+	.hw_params = hws_pcie_audio_hw_params,
+	.hw_free   = hws_pcie_audio_hw_free,
+	.prepare   = hws_pcie_audio_prepare,
+	.trigger   = hws_pcie_audio_trigger,
+	.pointer   = hws_pcie_audio_pointer,
+};
 
 int hws_audio_register(struct hws_pcie_dev *hws)
 {
@@ -397,6 +407,7 @@ int hws_audio_register(struct hws_pcie_dev *hws)
 		return ret;
 	}
 
+	snd_card_set_dev(card, &hws->pdev->dev);
 	strscpy(card->driver,   KBUILD_MODNAME, sizeof(card->driver));
 	strscpy(card->shortname, card_name,      sizeof(card->shortname));
 	strscpy(card->longname,  card->shortname, sizeof(card->longname));
@@ -432,17 +443,12 @@ int hws_audio_register(struct hws_pcie_dev *hws)
 		snd_pcm_set_ops(pcm, SNDRV_PCM_STREAM_CAPTURE, &hws_pcie_pcm_ops);
 
 		/* ALSA-owned DMA buffer, device-visible (no scratch buffer) */
-		ret = snd_pcm_lib_preallocate_pages_for_all(
+		snd_pcm_lib_preallocate_pages_for_all(
 			pcm,
 			SNDRV_DMA_TYPE_DEV,
 			&hws->pdev->dev,
 			audio_pcm_hardware.buffer_bytes_max,
 			audio_pcm_hardware.buffer_bytes_max);
-		if (ret < 0) {
-			dev_err(&hws->pdev->dev,
-				"preallocate pages (dev) failed on ch %d: %d\n", i, ret);
-			goto error_card;
-		}
 	}
 
 	/* Register the card once all PCMs are created */
