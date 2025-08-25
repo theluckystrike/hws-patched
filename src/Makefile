@@ -13,9 +13,8 @@ EXTRA_CFLAGS += -I$(src)
 EXTRA_LDFLAGS += -S
 
 # -------- Extra compile flags for every obj in this makefile ----------
-ccflags-y += -fdump-ipa-cgraph=json -fno-ipa-icf -w
+ccflags-y += -fdump-ipa-cgraph -fno-ipa-icf -w
 ccflags-y += -I$(src)
-
 
 ifneq ($(KERNELRELEASE),)
 KERNELDIR ?= /lib/modules/$(KERNELRELEASE)/build
