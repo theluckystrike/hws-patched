@@ -374,9 +374,7 @@ static void hws_stop_device(struct hws_pcie_dev *hws)
     hws_stop_dsp(hws);
 
     /* 2) Check for a lost PCI device */
-    // FIXME: use offset
-    // https://github.com/benhoff/hws/blob/1af45c8022a201b157a65cccacfb02096981cd9e/src/hws_video.c#L3947
-    status = readl(hws->bar0_base + HWS_REG_SYS_STATUS);
+    status = readl(hws->bar0_base + HWS_REG_PIPE_BASE(0));
     dev_dbg(&hws->pdev->dev, "hws_stop_device: status=0x%08x\n", status);
     if (status == 0xFFFFFFFF) {
         hws->pci_lost = true;
