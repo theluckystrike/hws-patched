@@ -105,9 +105,10 @@ static void hws_configure_hardware_capabilities(struct hws_pcie_dev *hdev)
 			hdev->hw_ver = 0;
 		} else {
 			hdev->hw_ver = 1;
-			/* DMA max size is scaler size / 16 */
-			// FIXME: not compiling
-			// writel(MAX_VIDEO_SCALER_SIZE >> 4, hdev->bar0_base + HWS_REG_DMA_MAX_SIZE);
+			u32 dma_max = (u32)(MAX_VIDEO_SCALER_SIZE / 16);
+			writel(dma_max, hdev->bar0_base + HWS_REG_DMA_MAX_SIZE);
+			/* readback to flush posted MMIO write */
+			(void)readl(hdev->bar0_base + HWS_REG_DMA_MAX_SIZE);
 		}
 	} else {
 		hdev->hw_ver = 0;
