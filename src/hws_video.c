@@ -331,7 +331,7 @@ void hws_init_video_sys(struct hws_pcie_dev *hws, bool enable)
 {
     int i;
 
-    /* If already running and we're not resetting, nothing to do */
+    /* If already running and we're not disabling, nothing to do */
     if (hws->start_run && !enable)
         return;
 
@@ -343,17 +343,16 @@ void hws_init_video_sys(struct hws_pcie_dev *hws, bool enable)
         for (i = 0; i < hws->max_channels; i++) {
             /* helpers to arm/disable capture engines */
             hws_enable_video_capture(hws, i, false);
-	    // FIXME: use false here
-            hws_enable_audio_capture(hws, i, 0);
+            hws_enable_audio_capture(hws, i, false);
         }
     }
 
     /* 4) enable all interrupts */
-    writel(0x003FFFFF, hws->bar0_base + INT_EN_REG_BASE);
+    writel(0x3FFFFF, hws->bar0_base + INT_EN_REG_BASE);
 
     /* 5) “Start run”: set bit31, wait a bit, then program low 24 bits */
     writel(0x80000000, hws->bar0_base + HWS_REG_DEC_MODE);
-    udelay(500);
+    // udelay(500);
     writel(0x80FFFFFF, hws->bar0_base + HWS_REG_DEC_MODE);
     writel(0x00000013, hws->bar0_base + HWS_REG_DEC_MODE);
 
