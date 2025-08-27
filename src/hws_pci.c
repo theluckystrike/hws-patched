@@ -141,11 +141,6 @@ static int read_chip_id(struct hws_pcie_dev *hdev)
 	hdev->start_run           = false;
 	hdev->pci_lost            = 0;
 
-	// FIXME
-	/* ── per-channel defaults ──────────────────────────────────── */
-	// for (i = 0; i < hdev->max_channels; i++)
-        //		set_video_format_size(hdev, i, 1920, 1080);
-
 	/* ── reset decoder core ───────────────────────────────────── */
 	writel(0x00, hdev->bar0_base + HWS_REG_DEC_MODE);
 	writel(0x10, hdev->bar0_base + HWS_REG_DEC_MODE);
