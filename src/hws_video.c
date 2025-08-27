@@ -3,17 +3,18 @@
 #include <linux/errno.h>
 #include <linux/kernel.h>
 #include <linux/overflow.h>
-#include <media/videobuf2-v4l2.h>
 #include <linux/delay.h>
 #include <linux/bits.h>
+
 #include <media/v4l2-ioctl.h>
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-dev.h>
 #include <media/v4l2-event.h>
-
+#include <media/videobuf2-v4l2.h>
 #include <media/videobuf2-core.h>
 #include <media/v4l2-device.h>
 #include <media/videobuf2-dma-contig.h>
+
 #include "hws.h"
 #include "hws_reg.h"
 #include "hws_video.h"
@@ -36,9 +37,6 @@ static void handle_hwv2_path(struct hws_pcie_dev *hws, unsigned int ch);
 static void handle_legacy_path(struct hws_pcie_dev *hws, unsigned int ch);
 static u32 hws_calc_sizeimage(struct hws_video *v, u16 w, u16 h, bool interlaced);
 
-/* ============================= */
-/*   per-channel ctrl init       */
-/* ============================= */
 static int hws_ctrls_init(struct hws_video *vid)
 {
 	struct v4l2_ctrl_handler *hdl = &vid->control_handler;
@@ -75,8 +73,7 @@ static int hws_ctrls_init(struct hws_video *vid)
 	}
 	return 0;
 }
-/* ─────────────────────────────────────────────────────────── */
-/* Per-video-channel initialisation                            */
+
 int hws_video_init_channel(struct hws_pcie_dev *pdev, int ch)
 {
 	struct hws_video *vid;
@@ -331,7 +328,6 @@ void hws_init_video_sys(struct hws_pcie_dev *hws, bool enable)
 {
     int i;
 
-    /* If already running and we're not disabling, nothing to do */
     if (hws->start_run && !enable)
         return;
 
@@ -450,9 +446,7 @@ static inline void hws_write_if_diff(struct hws_pcie_dev *hws,
 		(void)readl(addr);
 	}
 }
-/* ──────────────────────────────────────────────────────────────── */
-/* 0. HPD / +5 V                                                   */
-/* ──────────────────────────────────────────────────────────────── */
+
 static bool update_hpd_status(struct hws_pcie_dev *pdx, unsigned int ch)
 {
     u32  hpd    = hws_read_port_hpd(pdx, ch);   /* jack-level status   */
@@ -467,9 +461,6 @@ static bool update_hpd_status(struct hws_pcie_dev *pdx, unsigned int ch)
     return power && hpd_hi;
 }
 
-/* ──────────────────────────────────────────────────────────────── */
-/* 1. Active / interlace flags                                     */
-/* ──────────────────────────────────────────────────────────────── */
 static bool hws_update_active_interlace(struct hws_pcie_dev *pdx, unsigned int ch)
 {
 	u32 reg;
@@ -486,9 +477,6 @@ static bool hws_update_active_interlace(struct hws_pcie_dev *pdx, unsigned int c
 	return active;
 }
 
-/* ──────────────────────────────────────────────────────────────── */
-/* 2a. Modern devices (HW version > 0)                              */
-/* ──────────────────────────────────────────────────────────────── */
 /* Modern hardware path: keep HW registers in sync with current per-channel
  * software state. Adjust the OUT_* bits below to match your HW contract.
  */
@@ -702,7 +690,6 @@ static int hws_release(struct file *file)
     return vb2_fop_release(file);
 }
 
-//----------------------------
 static const struct v4l2_file_operations hws_fops = {
 	.owner = THIS_MODULE,
 	.open = hws_open,
