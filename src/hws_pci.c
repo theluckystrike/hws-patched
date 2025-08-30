@@ -8,6 +8,8 @@
 #include <linux/kthread.h>
 #include <linux/interrupt.h>
 #include <linux/dma-mapping.h>
+#include <linux/pm.h>
+#include <linux/freezer.h>
 
 #include <media/v4l2-ctrls.h>
 
@@ -164,7 +166,16 @@ static int main_ks_thread_handle(void *data)
 	int i;
 	bool need_check;
 
+	set_freezable();
+
 	while (!kthread_should_stop()) {
+		/* If we’re suspending, don’t touch hardware; just sleep/freeeze */
+		if (READ_ONCE(pdx->suspended)) {
+			try_to_freeze();
+			schedule_timeout_interruptible(msecs_to_jiffies(1000));
+			continue;
+		}
+
 		need_check = false;
 
 		/* See if any channel is running */
@@ -176,8 +187,10 @@ static int main_ks_thread_handle(void *data)
 		}
 
 		if (need_check)
-			// FIXME: figure out if we can check update_hpd_status early and exit fast
+			/* avoid MMIO when suspended (guarded above) */
 			check_video_format(pdx);
+
+		try_to_freeze(); /* cooperate with freezer each loop */
 
 		/* Sleep 1s or until signaled to wake/stop */
 		schedule_timeout_interruptible(msecs_to_jiffies(1000));
@@ -206,6 +219,8 @@ static int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 		return -ENOMEM;
 
 	hws->pdev = pdev;
+	hws->irq = -1;
+	hws->suspended = false;
 	pci_set_drvdata(pdev, hws);
 
 	/* 1) Managed enable + bus mastering */
@@ -274,6 +289,8 @@ static int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 		dev_err(&pdev->dev, "request_irq(%d): %d\n", irq, ret);
 		goto err_unwind_channels;
 	}
+
+	hws->irq = irq;
 
 	/* 10) Register V4L2/ALSA */
 	ret = hws_video_register(hws);
@@ -408,11 +425,82 @@ static void hws_remove(struct pci_dev *pdev)
 	/* kthread is stopped by the devm action you added in probe */
 }
 
+#ifdef CONFIG_PM_SLEEP
+static int hws_pm_suspend(struct device *dev)
+{
+	struct pci_dev *pdev = to_pci_dev(dev);
+	struct hws_pcie_dev *hws = pci_get_drvdata(pdev);
+
+	/* Block monitor thread / any hot path from MMIO */
+	WRITE_ONCE(hws->suspended, true);
+
+	/* Gracefully quiesce userspace I/O first */
+	hws_audio_pm_suspend_all(hws);          /* ALSA: stop substreams */
+	hws_video_pm_suspend(hws);               /* VB2: streamoff + drain + discard */
+
+	/* Quiesce hardware (DSP/engines) */
+	hws_stop_device(hws);
+
+	/* Gate interrupts while device is unavailable */
+	if (hws->irq >= 0)
+		disable_irq_sync(hws->irq);
+
+	pci_save_state(pdev);
+	pci_disable_device(pdev);
+	pci_set_power_state(pdev, PCI_D3hot);
+
+	return 0;
+}
+
+static int hws_pm_resume(struct device *dev)
+{
+	struct pci_dev *pdev = to_pci_dev(dev);
+	struct hws_pcie_dev *hws = pci_get_drvdata(pdev);
+	int ret;
+
+	/* Back to D0 and re-enable the function */
+	pci_set_power_state(pdev, PCI_D0);
+
+	ret = pci_enable_device(pdev);
+	if (ret) {
+		dev_err(dev, "pci_enable_device: %d\n", ret);
+		return ret;
+	}
+	pci_restore_state(pdev);
+	pci_set_master(pdev);
+
+	/* Reapply any PCIe tuning lost across D3 */
+	enable_pcie_relaxed_ordering(pdev);
+
+	/* Reinitialize chip-side capabilities / registers */
+	read_chip_id(hws);
+
+	/* IRQs can be re-enabled now that MMIO is sane */
+	if (hws->irq >= 0)
+		enable_irq(hws->irq);
+
+	WRITE_ONCE(hws->suspended, false);
+
+	/* vb2: nothing mandatory; userspace will STREAMON again when ready */
+	hws_video_pm_resume(hws);
+
+	return 0;
+}
+
+static SIMPLE_DEV_PM_OPS(hws_pm_ops, hws_pm_suspend, hws_pm_resume);
+# define HWS_PM_OPS (&hws_pm_ops)
+#else
+# define HWS_PM_OPS NULL
+#endif
+
 static struct pci_driver hws_pci_driver = {
 	.name = KBUILD_MODNAME,
 	.id_table = hws_pci_table,
 	.probe = hws_probe,
 	.remove = hws_remove,
+    .driver = {
+        .pm = HWS_PM_OPS,
+    },
 };
 
 MODULE_DEVICE_TABLE(pci, hws_pci_table);

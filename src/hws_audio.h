@@ -19,5 +19,6 @@ int  hws_start_audio_capture(struct hws_pcie_dev *pdx, unsigned int index);
 void hws_stop_audio_capture(struct hws_pcie_dev *pdx, unsigned int index);
 int hws_audio_init_channel(struct hws_pcie_dev *pdev, int ch);
 void hws_audio_cleanup_channel(struct hws_pcie_dev *pdev, int ch, bool device_removal);
+int hws_audio_pm_suspend_all(struct hws_pcie_dev *hws);
 
 #endif /* HWS_AUDIO_PIPELINE_H */

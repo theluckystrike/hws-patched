@@ -526,3 +526,44 @@ void hws_audio_unregister(struct hws_pcie_dev *hws)
              hws->cur_max_linein_ch);
 }
 
+int hws_audio_pm_suspend_all(struct hws_pcie_dev *hws)
+{
+	struct snd_pcm *seen[ MAX_VID_CHANNELS ];
+	int seen_cnt = 0;
+	int i, r, ret = 0;
+
+	/* Iterate channels and suspend each unique PCM device */
+	for (i = 0; i < hws->cur_max_video_ch; i++) {
+		struct hws_audio *a = &hws->audio[i];
+		struct snd_pcm_substream *ss;
+		struct snd_pcm *pcm;
+		int j, already = 0;
+
+		ss = a->pcm_substream;
+		if (!ss)
+			continue;
+
+		pcm = ss->pcm;
+		if (!pcm)
+			continue;
+
+		/* de-duplicate in case multiple channels share the same PCM */
+		for (j = 0; j < seen_cnt; j++) {
+			if (seen[j] == pcm) {
+				already = 1;
+				break;
+			}
+		}
+		if (already)
+			continue;
+
+		seen[seen_cnt++] = pcm;
+
+		r = snd_pcm_suspend_all(pcm);
+		if (r && !ret)
+			ret = r;
+	}
+
+	return ret;
+}
+

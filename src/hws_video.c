@@ -1106,3 +1106,30 @@ void hws_video_unregister(struct hws_pcie_dev *dev)
 	}
 	v4l2_device_unregister(&dev->v4l2_device);
 }
+
+int hws_video_pm_suspend(struct hws_pcie_dev *hws)
+{
+	int i, ret = 0;
+
+	for (i = 0; i < hws->cur_max_video_ch; i++) {
+		struct hws_video *vid = &hws->video[i];
+		struct vb2_queue *q = &vid->buffer_queue;
+
+		if (!q || !q->ops)
+		    continue;
+		if (vb2_is_streaming(q)) {
+			/* Stop via vb2 (runs your .stop_streaming) */
+			int r = vb2_streamoff(q, q->type);
+			if (r && !ret) ret = r;
+		}
+	}
+	return ret;
+}
+
+void hws_video_pm_resume(struct hws_pcie_dev *hws)
+{
+	/* Nothing mandatory to do here for vb2 — userspace will STREAMON again.
+	 * If you track per-channel 'auto-restart' policy, re-arm it here.
+	 */
+}
+

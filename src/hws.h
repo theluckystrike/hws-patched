@@ -206,6 +206,9 @@ struct hws_pcie_dev {
 	/* ───── kernel thread ───── */
 	struct task_struct        *main_task;
 
+	bool suspended;
+	int  irq;
+
 	/* ───── error flags ───── */
 	int                        pci_lost;
 	

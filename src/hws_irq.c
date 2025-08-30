@@ -21,6 +21,9 @@ static int hws_arm_next(struct hws_pcie_dev *hws, u32 ch)
     unsigned long flags;
     struct hwsvideo_buffer *buf;
 
+    if (unlikely(READ_ONCE(hws->suspended)))
+        return -EBUSY;
+
     if (unlikely(READ_ONCE(v->stop_requested) || !READ_ONCE(v->cap_active)))
         return -ECANCELED;
 
@@ -38,6 +41,11 @@ static int hws_arm_next(struct hws_pcie_dev *hws, u32 ch)
 
     /* Publish descriptor(s) before doorbell/MMIO kicks. */
     wmb();
+
+    /* Avoid MMIO during suspend */
+    if (unlikely(READ_ONCE(hws->suspended)))
+        return -EBUSY;
+
     hws_program_video_from_vb2(hws, ch, &buf->vb.vb2_buf);
     return 0;
 }
@@ -49,6 +57,9 @@ void hws_bh_video(struct tasklet_struct *t)
     unsigned int ch = v->channel_index;
     struct hwsvideo_buffer *done;
     int ret;
+
+    if (unlikely(READ_ONCE(hws->suspended)))
+        return;
 
     if (unlikely(READ_ONCE(v->stop_requested) || !READ_ONCE(v->cap_active)))
         return;
@@ -67,6 +78,9 @@ void hws_bh_video(struct tasklet_struct *t)
         vb2_buffer_done(&vb2v->vb2_buf, VB2_BUF_STATE_DONE);
     }
 
+    if (unlikely(READ_ONCE(hws->suspended)))
+        return;
+
     /* 2) Immediately arm the next queued buffer (if present) */
     ret = hws_arm_next(hws, ch);
     if (ret == -EAGAIN) {
@@ -80,6 +94,14 @@ irqreturn_t irqhandler(int irq, void *info)
 {
     struct hws_pcie_dev *pdx = info;
     u32 int_state, ack_mask = 0;
+
+    /* Fast path: if suspended, quietly ack and exit */
+    if (unlikely(READ_ONCE(pdx->suspended))) {
+        int_state = readl(pdx->bar0_base + HWS_REG_INT_STATUS);
+        if (int_state)
+            writel(int_state, pdx->bar0_base + HWS_REG_INT_ACK);
+        return int_state ? IRQ_HANDLED : IRQ_NONE;
+    }
 
     u32 sys_status = readl(pdx->bar0_base + HWS_REG_SYS_STATUS);
 
