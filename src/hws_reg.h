@@ -2,6 +2,49 @@
 #ifndef _HWS_PCIE_REG_H
 #define _HWS_PCIE_REG_H
 
+#include <linux/bits.h>
+#include <linux/sizes.h>
+
+#define XDMA_CHANNEL_NUM_MAX (1)
+#define MAX_NUM_ENGINES (XDMA_CHANNEL_NUM_MAX * 2)
+
+#define  PCIE_BARADDROFSIZE 4u
+
+#define PCI_BUS_ACCESS_BASE       0x00000000U
+#define INT_EN_REG_BASE           (PCI_BUS_ACCESS_BASE + 0x0134U)
+#define PCIEBR_EN_REG_BASE        (PCI_BUS_ACCESS_BASE + 0x0148U)
+#define PCIE_INT_DEC_REG_BASE     (PCI_BUS_ACCESS_BASE + 0x0138U)
+
+
+#define PCIEBAR_AXI_BASE 0x20000000U
+
+#define CTL_REG_ACC_BASE 0x0
+#define PCI_ADDR_TABLE_BASE CTL_REG_ACC_BASE
+
+#define CVBS_IN_BASE              0x00004000U
+#define CVBS_IN_BUF_BASE          (CVBS_IN_BASE + (16U * PCIE_BARADDROFSIZE))
+#define CVBS_IN_BUF_BASE2         (CVBS_IN_BASE + (50U * PCIE_BARADDROFSIZE))
+
+/* 2 Mib */
+#define MAX_L_VIDEO_SIZE			0x200000U
+
+
+#define PCI_E_BAR_PAGE_SIZE 0x20000000
+#define PCI_E_BAR_ADD_MASK 0xE0000000
+#define PCI_E_BAR_ADD_LOWMASK 0x1FFFFFFF
+
+#define MAX_DMA_AUDIO_PK_SIZE      (128U * 16U * 2U)
+
+
+#define MAX_VID_CHANNELS            4
+
+#define MAX_MM_VIDEO_SIZE            SZ_4M
+
+#define MAX_VIDEO_HW_W 1920
+#define MAX_VIDEO_HW_H 1080
+#define MAX_VIDEO_SCALER_SIZE     (1920U * 1080U * 2U)
+
+
 #define  PCI_BARADDROFSIZE 4
 
 
@@ -18,10 +61,10 @@
 #define MAX_VAMP_HUE_UNITS          0xff
 
 
-#define BrightnessDefault  0x80
-#define ContrastDefault    0x80
-#define SaturationDefault  0x80
-#define HueDefault         0x00
+#define HWS_BRIGHTNESS_DEFAULT       0x80
+#define HWS_CONTRAST_DEFAULT         0x80
+#define HWS_SATURATION_DEFAULT       0x80
+#define HWS_HUE_DEFAULT              0x00
 
 /* ── Core / global status ─────────────────────────────────────────────────── */
 #define HWS_REG_SYS_STATUS            (CVBS_IN_BASE +  0 * PCI_BARADDROFSIZE)
@@ -104,53 +147,5 @@
 #define HWS_REG_ABUF_TOGGLE_CH2       HWS_REG_ABUF_TOGGLE(2)
 #define HWS_REG_ABUF_TOGGLE_CH3       HWS_REG_ABUF_TOGGLE(3)
 
-typedef enum
-{
-	YUYV = 0,
-	UYVY,
-	YVYU,
-	VYUY,
-	RGBP,
-	RGBR,
-	RGBO,
-	RGBQ,
-	RGB3,
-	BGR3,
-	RGB4,
-	BGR4,	
-}framegrabber_pixfmt_enum_t;
 
-typedef struct  {
-	const char *name;
-	int   fourcc;          /* v4l2 format id */
-	char  depth;
-	char  is_yuv;
-	framegrabber_pixfmt_enum_t pixfmt_out;
-}framegrabber_pixfmt_t;
-
-typedef struct frame_size
-{
-	int width;
-	int height;
-}framegrabber_frame_size_t;
-	
-typedef struct
-{
-	struct frame_size frame_size;
-	int refresh_rate;
-	bool  is_interlace;
-} v4l2_model_timing_t;
-
-
-#define V4L2_MODEL_TIMING(w,h,f,i) \
-	{ \
-		.frame_size = { \
-			.width = w, \
-			.height = h, \
-		}, \
-		.refresh_rate = f, \
-		.is_interlace = i, \
-	}
-	
-
-#endif
+#endif /* _HWS_PCIE_REG_H */

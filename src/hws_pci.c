@@ -443,7 +443,7 @@ static int hws_pm_suspend(struct device *dev)
 
 	/* Gate interrupts while device is unavailable */
 	if (hws->irq >= 0)
-		disable_irq_sync(hws->irq);
+		disable_irq(hws->irq);
 
 	pci_save_state(pdev);
 	pci_disable_device(pdev);

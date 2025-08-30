@@ -3,7 +3,6 @@
 #define HWS_PCIE_H
 
 #include <linux/types.h>
-#include <linux/bitops.h>
 #include <linux/dma-mapping.h>
 #include <linux/kthread.h>
 #include <linux/pci.h>
@@ -18,48 +17,9 @@
 #include <media/v4l2-device.h>
 #include <media/videobuf2-dma-sg.h>
 
+#include "hws_reg.h"
+
 struct snd_pcm_substream;
-
-#define XDMA_CHANNEL_NUM_MAX (1)
-#define MAX_NUM_ENGINES (XDMA_CHANNEL_NUM_MAX * 2)
-
-#define  PCIE_BARADDROFSIZE 4u
-
-#define PCI_BUS_ACCESS_BASE       0x00000000U
-#define INT_EN_REG_BASE           (PCI_BUS_ACCESS_BASE + 0x0134U)
-#define PCIEBR_EN_REG_BASE        (PCI_BUS_ACCESS_BASE + 0x0148U)
-#define PCIE_INT_DEC_REG_BASE     (PCI_BUS_ACCESS_BASE + 0x0138U)
-
-
-#define PCIEBAR_AXI_BASE 0x20000000
-
-#define CTL_REG_ACC_BASE 0x0
-#define PCI_ADDR_TABLE_BASE CTL_REG_ACC_BASE
-
-#define CVBS_IN_BASE              0x00004000U
-#define CVBS_IN_BUF_BASE          (CVBS_IN_BASE + (16U * PCIE_BARADDROFSIZE))
-#define CVBS_IN_BUF_BASE2         (CVBS_IN_BASE + (50U * PCIE_BARADDROFSIZE))
-
-
-#define MAX_L_VIDEO_SIZE			0x200000	//2M
-
-
-#define PCI_E_BAR_PAGE_SIZE 0x20000000
-#define PCI_E_BAR_ADD_MASK 0xE0000000
-#define PCI_E_BAR_ADD_LOWMASK 0x1FFFFFFF
-
-#define MAX_DMA_AUDIO_PK_SIZE      128*16*2
-
-
-#define PAGESIZE					4096
-
-#define MAX_VID_CHANNELS            4
-
-#define MAX_MM_VIDEO_SIZE            SZ_4M
-
-#define MAX_VIDEO_HW_W 1920
-#define MAX_VIDEO_HW_H 1080
-#define MAX_VIDEO_SCALER_SIZE     (1920U * 1080U * 2U)
 
 struct hwsmem_param 
 {

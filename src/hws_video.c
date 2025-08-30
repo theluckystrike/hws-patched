@@ -49,21 +49,21 @@ static int hws_ctrls_init(struct hws_video *vid)
 						 V4L2_CID_BRIGHTNESS,
 						 MIN_VAMP_BRIGHTNESS_UNITS,
 						 MAX_VAMP_BRIGHTNESS_UNITS, 1,
-						 BrightnessDefault);
+						 HWS_BRIGHTNESS_DEFAULT);
 
 	vid->ctrl_contrast = v4l2_ctrl_new_std(
 		hdl, &hws_ctrl_ops, V4L2_CID_CONTRAST, MIN_VAMP_CONTRAST_UNITS,
-		MAX_VAMP_CONTRAST_UNITS, 1, ContrastDefault);
+		MAX_VAMP_CONTRAST_UNITS, 1, HWS_CONTRAST_DEFAULT);
 
 	vid->ctrl_saturation = v4l2_ctrl_new_std(hdl, &hws_ctrl_ops,
 						 V4L2_CID_SATURATION,
 						 MIN_VAMP_SATURATION_UNITS,
 						 MAX_VAMP_SATURATION_UNITS, 1,
-						 SaturationDefault);
+						 HWS_SATURATION_DEFAULT);
 
 	vid->ctrl_hue = v4l2_ctrl_new_std(hdl, &hws_ctrl_ops, V4L2_CID_HUE,
 					  MIN_VAMP_HUE_UNITS,
-					  MAX_VAMP_HUE_UNITS, 1, HueDefault);
+					  MAX_VAMP_HUE_UNITS, 1, HWS_HUE_DEFAULT);
 
 	vid->detect_tx_5v_control = v4l2_ctrl_new_std(
 		hdl, &hws_ctrl_ops, V4L2_CID_DV_RX_POWER_PRESENT, 0, 1, 1, 0);
