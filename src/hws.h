@@ -11,7 +11,9 @@
 #include <linux/workqueue.h>
 #include <linux/sizes.h>
 
+#include <sound/pcm.h>
 #include <sound/core.h>
+
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-device.h>
 #include <media/videobuf2-dma-sg.h>
@@ -163,7 +165,8 @@ struct hws_audio {
     bool                       stop_requested;
 
     /* minimal HW period tracking (optional) */
-    u8                         last_period_toggle;   // or hw_period index
+    u8                         last_period_toggle;
+    snd_pcm_uframes_t ring_wpos_byframes;
 
     /* PCM format (for HW programming) */
     u32                        output_sample_rate;

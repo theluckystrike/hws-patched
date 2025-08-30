@@ -12,7 +12,6 @@
 #include <sound/initval.h>
 #include "hws_video.h"
 
-extern size_t hws_audio_dma_wptr_bytes(struct hws_pcie_dev *hws, unsigned int ch);
 
 static const struct snd_pcm_hardware audio_pcm_hardware = {
 	.info = (SNDRV_PCM_INFO_MMAP | SNDRV_PCM_INFO_INTERLEAVED |
@@ -52,15 +51,6 @@ void hws_audio_hw_stop(struct hws_pcie_dev *hws, unsigned int ch)
 			readl(hws->bar0_base + HWS_REG_INT_STATUS);
 		}
 	}
-}
-
-// FIXME: wants the rel HW write pointer
-size_t hws_audio_dma_wptr_bytes(struct hws_pcie_dev *hws, unsigned int ch)
-{
-	if (!hws || ch >= hws->cur_max_linein_ch)
-		return 0;
-
-	return (size_t)hws->audio[ch].next_period * hws->audio[ch].period_bytes;
 }
 
 void hws_audio_program_next_period(struct hws_pcie_dev *hws, unsigned int ch)
@@ -225,6 +215,8 @@ int hws_start_audio_capture(struct hws_pcie_dev *hws, unsigned int ch)
      if (ret)
          return ret;
 
+     hws->audio[ch].ring_wpos_byframes = 0;
+
 	/* Prime first period before enabling the engine */
 	hws->audio[ch].next_period = 0;
 	hws_audio_program_next_period(hws, ch);
@@ -283,6 +275,7 @@ void hws_stop_audio_capture(struct hws_pcie_dev *hws, unsigned int ch)
 
     /* 3) Ack any latched ADONE to prevent retrigger storms */
     hws_audio_ack_pending(hws, ch);
+    hws->audio[ch].ring_wpos_byframes = 0;
 
     dev_dbg(&hws->pdev->dev, "audio capture stopped on ch %u\n", ch);
 }
@@ -311,13 +304,8 @@ void hws_enable_audio_capture(struct hws_pcie_dev *hws,
 
 static snd_pcm_uframes_t hws_pcie_audio_pointer(struct snd_pcm_substream *substream)
 {
-	struct hws_audio *a = snd_pcm_substream_chip(substream);
-	struct snd_pcm_runtime *rt = substream->runtime;
-	struct hws_pcie_dev *hws = a->parent;
-	unsigned int ch = a->channel_index;
-
-	size_t off_bytes = hws_audio_dma_wptr_bytes(hws, ch); /* device -> bytes from base */
-	return bytes_to_frames(rt, off_bytes % rt->dma_bytes);
+    struct hws_audio *a = snd_pcm_substream_chip(substream);
+    return READ_ONCE(a->ring_wpos_byframes);
 }
 
 int hws_pcie_audio_open(struct snd_pcm_substream *substream)
@@ -364,6 +352,8 @@ int hws_pcie_audio_prepare(struct snd_pcm_substream *substream)
 	a->period_bytes = frames_to_bytes(rt, rt->period_size);
 	a->periods      = rt->periods;
 	a->next_period  = 0;
+
+	a->ring_wpos_byframes = 0;
 
 	/* Optional: clear HW toggle readback */
 	a->last_period_toggle = 0;

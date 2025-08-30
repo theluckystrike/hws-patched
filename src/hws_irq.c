@@ -1,9 +1,10 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include <linux/compiler.h>
 #include <linux/io.h>
-#include <linux/interrupt.h>
 #include <linux/dma-mapping.h>
 #include <linux/interrupt.h>
+
+#include <sound/pcm.h>
 
 #include "hws_irq.h"
 #include "hws_reg.h"
@@ -156,9 +157,20 @@ irqreturn_t irqhandler(int irq, void *info)
             /* Make device writes visible before notifying ALSA */
             dma_rmb();
 
-            if (pdx->audio[ch].pcm_substream)
-                snd_pcm_period_elapsed(pdx->audio[ch].pcm_substream);
-
+		struct hws_audio *a = &pdx->audio[ch];
+		struct snd_pcm_substream *ss = READ_ONCE(a->pcm_substream);
+		if (ss) {
+		    struct snd_pcm_runtime *rt = READ_ONCE(ss->runtime);
+		    if (rt) {
+			snd_pcm_uframes_t step = bytes_to_frames(rt, a->period_bytes);
+			snd_pcm_uframes_t pos  = READ_ONCE(a->ring_wpos_byframes);
+		       pos += step;
+			if (pos >= rt->buffer_size)
+			    pos -= rt->buffer_size;
+			WRITE_ONCE(a->ring_wpos_byframes, pos);
+			snd_pcm_period_elapsed(ss);
+		    }
+		}
             /* Program the period HW will fill next */
             hws_audio_program_next_period(pdx, ch);
         }
