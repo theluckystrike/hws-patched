@@ -13,7 +13,6 @@
 
 
 #define MAX_INT_LOOPS 100
-#define CH_MASK     GENMASK(CH_SHIFT-1, 0)
 
 
 static int hws_arm_next(struct hws_pcie_dev *hws, u32 ch)
@@ -156,23 +155,35 @@ irqreturn_t irqhandler(int irq, void *info)
 
             /* Make device writes visible before notifying ALSA */
             dma_rmb();
+		/* Period accounting + rearm + notify ALSA. */
+		{
+			struct hws_audio *a = &pdx->audio[ch];
+			struct snd_pcm_substream *ss = READ_ONCE(a->pcm_substream);
 
-		struct hws_audio *a = &pdx->audio[ch];
-		struct snd_pcm_substream *ss = READ_ONCE(a->pcm_substream);
-		if (ss) {
-		    struct snd_pcm_runtime *rt = READ_ONCE(ss->runtime);
-		    if (rt) {
-			snd_pcm_uframes_t step = bytes_to_frames(rt, a->period_bytes);
-			snd_pcm_uframes_t pos  = READ_ONCE(a->ring_wpos_byframes);
-		       pos += step;
-			if (pos >= rt->buffer_size)
-			    pos -= rt->buffer_size;
-			WRITE_ONCE(a->ring_wpos_byframes, pos);
-			snd_pcm_period_elapsed(ss);
-		    }
+			if (likely(ss)) {
+				struct snd_pcm_runtime *rt = READ_ONCE(ss->runtime);
+				if (likely(rt)) {
+					/* Advance write pointer by exactly one period (frames). */
+					snd_pcm_uframes_t pos = READ_ONCE(a->ring_wpos_byframes);
+					pos += rt->period_size; /* see note below on equivalence */
+					if (pos >= rt->buffer_size)
+						pos -= rt->buffer_size;
+					WRITE_ONCE(a->ring_wpos_byframes, pos);
+
+					/* Small race guard: avoid arming if a stop just landed. */
+					if (likely(!READ_ONCE(a->stop_requested))) {
+						/* Program the period the HW will fill next.
+						 * This helper MUST include a posted-write flush/readback
+						 * of the MMIO sequence so the writes are visible before ACK.
+						 */
+						hws_audio_program_next_period(pdx, ch);
+					}
+
+					/* Now tell ALSA a period elapsed (after re-arming). */
+					snd_pcm_period_elapsed(ss);
+				}
+			}
 		}
-            /* Program the period HW will fill next */
-            hws_audio_program_next_period(pdx, ch);
         }
 
         /* Acknowledge (clear) all bits we just handled */

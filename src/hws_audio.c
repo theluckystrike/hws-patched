@@ -27,7 +27,7 @@ static const struct snd_pcm_hardware audio_pcm_hardware = {
 	.period_bytes_min = 512,
 	.period_bytes_max = 16 * 1024,
 	.periods_min = 2,
-	.periods_max = 255,
+	.periods_max = 64,
 };
 
 
@@ -499,6 +499,7 @@ void hws_audio_unregister(struct hws_pcie_dev *hws)
         WRITE_ONCE(a->stream_running, false);
         WRITE_ONCE(a->cap_active,     false);
         WRITE_ONCE(a->stop_requested, true);
+	smp_wmb();
 
         hws_enable_audio_capture(hws, i, false);
     }
@@ -508,7 +509,7 @@ void hws_audio_unregister(struct hws_pcie_dev *hws)
     hws_audio_ack_all(hws);
 
     if (hws->snd_card) {
-        snd_card_free(hws->snd_card);
+        snd_card_free_when_closed(hws->snd_card);
         hws->snd_card = NULL;
     }
 
@@ -518,18 +519,20 @@ void hws_audio_unregister(struct hws_pcie_dev *hws)
 
 int hws_audio_pm_suspend_all(struct hws_pcie_dev *hws)
 {
-	struct snd_pcm *seen[ MAX_VID_CHANNELS ];
+	struct snd_pcm *seen[ARRAY_SIZE(hws->audio)];
 	int seen_cnt = 0;
-	int i, r, ret = 0;
+	int i, j, ret = 0;
 
-	/* Iterate channels and suspend each unique PCM device */
-	for (i = 0; i < hws->cur_max_video_ch; i++) {
+	if (!hws || !hws->snd_card)
+		return 0;
+
+	/* Iterate audio channels and suspend each unique PCM device */
+	for (i = 0; i < hws->cur_max_linein_ch && i < ARRAY_SIZE(hws->audio); i++) {
 		struct hws_audio *a = &hws->audio[i];
-		struct snd_pcm_substream *ss;
+		struct snd_pcm_substream *ss = READ_ONCE(a->pcm_substream);
 		struct snd_pcm *pcm;
-		int j, already = 0;
+		bool already = false;
 
-		ss = a->pcm_substream;
 		if (!ss)
 			continue;
 
@@ -537,21 +540,27 @@ int hws_audio_pm_suspend_all(struct hws_pcie_dev *hws)
 		if (!pcm)
 			continue;
 
-		/* de-duplicate in case multiple channels share the same PCM */
+		/* De-duplicate in case multiple channels share a PCM */
 		for (j = 0; j < seen_cnt; j++) {
 			if (seen[j] == pcm) {
-				already = 1;
+				already = true;
 				break;
 			}
 		}
 		if (already)
 			continue;
 
-		seen[seen_cnt++] = pcm;
+		if (seen_cnt < ARRAY_SIZE(seen))
+			seen[seen_cnt++] = pcm;
 
-		r = snd_pcm_suspend_all(pcm);
-		if (r && !ret)
-			ret = r;
+		if (!ret) {
+			int r = snd_pcm_suspend_all(pcm);
+			if (r)
+				ret = r;  /* remember first error, keep going */
+		}
+
+		if (seen_cnt == ARRAY_SIZE(seen))
+			break; /* defensive: shouldn't happen with sane config */
 	}
 
 	return ret;
