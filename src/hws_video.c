@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
+// SPDX-License-Identifier: GPL-2.0-only
 #include <linux/pci.h>
 #include <linux/errno.h>
 #include <linux/kernel.h>
@@ -28,7 +28,6 @@
 #include <sound/rawmidi.h>
 #include <sound/initval.h>
 
-
 static void update_live_resolution(struct hws_pcie_dev *pdx, unsigned int ch);
 static bool hws_update_active_interlace(struct hws_pcie_dev *pdx,
 					unsigned int ch);
@@ -50,9 +49,9 @@ static int hws_ctrls_init(struct hws_video *vid)
 						 MAX_VAMP_BRIGHTNESS_UNITS, 1,
 						 HWS_BRIGHTNESS_DEFAULT);
 
-	vid->ctrl_contrast = v4l2_ctrl_new_std(
-		hdl, &hws_ctrl_ops, V4L2_CID_CONTRAST, MIN_VAMP_CONTRAST_UNITS,
-		MAX_VAMP_CONTRAST_UNITS, 1, HWS_CONTRAST_DEFAULT);
+	vid->ctrl_contrast = v4l2_ctrl_new_std(hdl, &hws_ctrl_ops, V4L2_CID_CONTRAST,
+					       MIN_VAMP_CONTRAST_UNITS, MAX_VAMP_CONTRAST_UNITS,
+					       1, HWS_CONTRAST_DEFAULT);
 
 	vid->ctrl_saturation = v4l2_ctrl_new_std(hdl, &hws_ctrl_ops,
 						 V4L2_CID_SATURATION,
@@ -64,14 +63,16 @@ static int hws_ctrls_init(struct hws_video *vid)
 					  MIN_VAMP_HUE_UNITS,
 					  MAX_VAMP_HUE_UNITS, 1, HWS_HUE_DEFAULT);
 
-	vid->detect_tx_5v_control = v4l2_ctrl_new_std(
-		hdl, &hws_ctrl_ops, V4L2_CID_DV_RX_POWER_PRESENT, 0, 1, 1, 0);
+	vid->detect_tx_5v_control = v4l2_ctrl_new_std(hdl, &hws_ctrl_ops,
+						      V4L2_CID_DV_RX_POWER_PRESENT, 0, 1, 1, 0);
+
 	if (vid->detect_tx_5v_control)
 		vid->detect_tx_5v_control->flags |= V4L2_CTRL_FLAG_VOLATILE |
 						    V4L2_CTRL_FLAG_READ_ONLY;
 
 	if (hdl->error) {
 		int err = hdl->error;
+
 		v4l2_ctrl_handler_free(hdl);
 		return err;
 	}
@@ -137,6 +138,7 @@ int hws_video_init_channel(struct hws_pcie_dev *pdev, int ch)
 	/* Create BCHS + DV power-present as modern controls */
 	{
 		int err = hws_ctrls_init(vid);
+
 		if (err) {
 			dev_err(&pdev->pdev->dev,
 				"v4l2 ctrl init failed on ch%d: %d\n", ch, err);
@@ -157,8 +159,9 @@ static void hws_video_drain_queue_locked(struct hws_video *vid)
 
 	/* Then everything queued */
 	while (!list_empty(&vid->capture_queue)) {
-		struct hwsvideo_buffer *b = list_first_entry(
-			&vid->capture_queue, struct hwsvideo_buffer, list);
+		struct hwsvideo_buffer *b = list_first_entry(&vid->capture_queue,
+							     struct hwsvideo_buffer,
+							     list);
 		list_del_init(&b->list);
 		vb2_buffer_done(&b->vb.vb2_buf, VB2_BUF_STATE_ERROR);
 	}
@@ -385,15 +388,16 @@ int hws_check_card_status(struct hws_pcie_dev *hws)
 void check_video_format(struct hws_pcie_dev *pdx)
 {
 	int i;
+
 	for (i = 0; i < pdx->cur_max_video_ch; i++) {
 		// FIXME: I don't think this works?
 		// if (!update_hpd_status(pdx, ch))
 		//    return 1;                         /* no +5 V / HPD */
 
-		if (!hws_update_active_interlace(pdx, i))
+		if (!hws_update_active_interlace(pdx, i)) {
 			// return 1;                         /* no active video */
 			pdx->video[i].signal_loss_cnt = 1;
-		else {
+		} else {
 			if (pdx->hw_ver > 0)
 				handle_hwv2_path(pdx, i);
 			else
@@ -405,8 +409,8 @@ void check_video_format(struct hws_pcie_dev *pdx)
 		}
 
 		/* If we just detected a loss on an active capture channel… */
-		if ((pdx->video[i].signal_loss_cnt == 0x1) &&
-		    (pdx->video[i].cap_active == true)) {
+		if (pdx->video[i].signal_loss_cnt == 1 &&
+		    pdx->video[i].cap_active) {
 			/* …schedule the “no‐video” handler on the vido_wq workqueue */
 			// FIXME: this is where we can catch if the system has blanked on us
 			// probably need to rewire this, because we removed the videowork
@@ -566,6 +570,11 @@ static void hws_video_apply_mode_change(struct hws_pcie_dev *pdx,
 
 	WRITE_ONCE(v->stop_requested, true);
 	WRITE_ONCE(v->cap_active, false);
+	/* Publish software stop first so the hardirq/BH see the stop before
+	 * we touch MMIO or the lists. Pairs with READ_ONCE() checks in
+	 * hws_bh_video() and hws_arm_next(). Required to prevent the BH/ISR
+	 * from completing/arming buffers while we are changing modes.
+	 */
 	smp_wmb();
 
 	hws_enable_video_capture(pdx, ch, false);
@@ -579,8 +588,8 @@ static void hws_video_apply_mode_change(struct hws_pcie_dev *pdx,
 		v->active = NULL;
 	}
 	while (!list_empty(&v->capture_queue)) {
-		struct hwsvideo_buffer *b = list_first_entry(
-			&v->capture_queue, struct hwsvideo_buffer, list);
+		struct hwsvideo_buffer *b = list_first_entry(&v->capture_queue,
+							     struct hwsvideo_buffer, list);
 		list_del_init(&b->list);
 		vb2_buffer_done(&b->vb.vb2_buf, VB2_BUF_STATE_ERROR);
 	}
@@ -634,6 +643,9 @@ static void hws_video_apply_mode_change(struct hws_pcie_dev *pdx,
 
 	WRITE_ONCE(v->stop_requested, false);
 	WRITE_ONCE(v->cap_active, true);
+	/* Publish stop_requested/cap_active before HW disable; pairs with
+	 * BH/ISR reads in hws_bh_video/hws_arm_next.
+	 */
 	smp_wmb();
 	hws_enable_video_capture(pdx, ch, true);
 	readl(pdx->bar0_base + HWS_REG_INT_STATUS);
@@ -802,11 +814,11 @@ static int hws_queue_setup(struct vb2_queue *q, unsigned int *num_buffers,
 	return 0;
 }
 
-
 static int hws_buffer_prepare(struct vb2_buffer *vb)
 {
 	struct hws_video *vid = vb->vb2_queue->drv_priv;
 	size_t need = vid->pix.sizeimage;
+
 	if (vb2_plane_size(vb, 0) < vid->alloc_sizeimage)
 		return -EINVAL;
 
@@ -861,6 +873,7 @@ static int hws_start_streaming(struct vb2_queue *q, unsigned int count)
 	/* 3) Prime first buffer if nothing in-flight */
 	if (!v->active) {
 		struct hwsvideo_buffer *first;
+
 		first = list_first_entry(&v->capture_queue,
 					 struct hwsvideo_buffer, list);
 		list_del(&first->list);
@@ -915,8 +928,9 @@ static void hws_stop_streaming(struct vb2_queue *q)
 	}
 
 	while (!list_empty(&v->capture_queue)) {
-		struct hwsvideo_buffer *b = list_first_entry(
-			&v->capture_queue, struct hwsvideo_buffer, list);
+		struct hwsvideo_buffer *b = list_first_entry(&v->capture_queue,
+							     struct hwsvideo_buffer,
+							     list);
 		list_del(&b->list);
 		vb2_buffer_done(&b->vb.vb2_buf, VB2_BUF_STATE_ERROR);
 	}
@@ -1113,11 +1127,13 @@ int hws_video_pm_suspend(struct hws_pcie_dev *hws)
 		struct vb2_queue *q = &vid->buffer_queue;
 
 		if (!q || !q->ops)
-		    continue;
+			continue;
 		if (vb2_is_streaming(q)) {
 			/* Stop via vb2 (runs your .stop_streaming) */
 			int r = vb2_streamoff(q, q->type);
-			if (r && !ret) ret = r;
+
+			if (r && !ret)
+				ret = r;
 		}
 	}
 	return ret;
