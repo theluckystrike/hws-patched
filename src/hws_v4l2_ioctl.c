@@ -3,11 +3,14 @@
 #include <linux/string.h>
 #include <linux/pci.h>
 #include <linux/errno.h>
+#include <linux/io.h>
+
 #include <media/v4l2-ioctl.h>
 #include <media/v4l2-dev.h>
 #include <media/v4l2-dv-timings.h>
 #include <media/videobuf2-core.h>
 #include <media/videobuf2-v4l2.h>
+
 #include "hws.h"
 #include "hws_reg.h"
 #include "hws_video.h"
@@ -123,6 +126,9 @@ int hws_vidioc_enum_dv_timings(struct file *file, void *fh,
 	if (!edv)
 		return -EINVAL;
 
+	    if (edv->pad || edv->type != V4L2_DV_BT_656_1120)
+		return -EINVAL;
+
 	if (edv->index >= hws_dv_modes_cnt)
 		return -EINVAL;
 
@@ -208,11 +214,6 @@ int hws_vidioc_s_dv_timings(struct file *file, void *fh,
 	vid->pix.interlaced = interlaced;
 	vid->pix.fourcc     = V4L2_PIX_FMT_YUYV;
 
-	/* Keep/refresh colorimetry defaults; adjust here if HW reports it */
-	vid->pix.colorspace   = V4L2_COLORSPACE_REC709;
-	vid->pix.ycbcr_enc    = V4L2_YCBCR_ENC_DEFAULT;
-	vid->pix.quantization = V4L2_QUANTIZATION_LIM_RANGE;
-	vid->pix.xfer_func    = V4L2_XFER_FUNC_DEFAULT;
 	hws_set_colorimetry_state(&vid->pix);
 
 	/* Recompute stride/sizeimage/half_size using your helper */
@@ -231,16 +232,15 @@ out_unlock:
 int hws_vidioc_dv_timings_cap(struct file *file, void *fh,
 			      struct v4l2_dv_timings_cap *cap)
 {
-	u32 min_w = U32_MAX, min_h = U32_MAX;
+	u32 min_w = ~0U, min_h = ~0U;
 	u32 max_w = 0,       max_h = 0;
-	size_t i;
+	size_t i, n = 0;
 
 	if (!cap)
 		return -EINVAL;
 
 	memset(cap, 0, sizeof(*cap));
 	cap->type = V4L2_DV_BT_656_1120;
-	size_t n = 0;
 
 	for (i = 0; i < ARRAY_SIZE(hws_dv_modes); i++) {
 		const struct v4l2_bt_timings *bt = &hws_dv_modes[i].bt;
