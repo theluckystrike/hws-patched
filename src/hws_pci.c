@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
+// SPDX-License-Identifier: GPL-2.0-only
 #include <linux/pci.h>
 #include <linux/types.h>
 #include <linux/iopoll.h>
@@ -106,6 +106,7 @@ static void hws_configure_hardware_capabilities(struct hws_pcie_dev *hdev)
 		} else {
 			hdev->hw_ver = 1;
 			u32 dma_max = (u32)(MAX_VIDEO_SCALER_SIZE / 16);
+
 			writel(dma_max, hdev->bar0_base + HWS_REG_DMA_MAX_SIZE);
 			/* readback to flush posted MMIO write */
 			(void)readl(hdev->bar0_base + HWS_REG_DMA_MAX_SIZE);
@@ -124,7 +125,7 @@ static int read_chip_id(struct hws_pcie_dev *hdev)
 	/* mirror PCI IDs for later switches */
 	hdev->device_id = hdev->pdev->device;
 	hdev->vendor_id = hdev->pdev->vendor;
-	/* ── read the on-chip device-info register ─────────────────── */
+
 	reg = readl(hdev->bar0_base + HWS_REG_DEVICE_INFO);
 
 	hdev->device_ver = FIELD_GET(DEVINFO_VER, reg);
@@ -132,7 +133,6 @@ static int read_chip_id(struct hws_pcie_dev *hdev)
 	hdev->support_yv12 = FIELD_GET(DEVINFO_YV12, reg);
 	hdev->port_id = FIELD_GET(DEVINFO_PORTID, reg);
 
-	/* ── fill in static capabilities ───────────────────────────── */
 	hdev->max_hw_video_buf_sz = MAX_MM_VIDEO_SIZE;
 	hdev->max_channels = 4;
 	hdev->buf_allocated = false;
@@ -141,7 +141,6 @@ static int read_chip_id(struct hws_pcie_dev *hdev)
 	hdev->start_run = false;
 	hdev->pci_lost = 0;
 
-	/* ── reset decoder core ───────────────────────────────────── */
 	writel(0x00, hdev->bar0_base + HWS_REG_DEC_MODE);
 	writel(0x10, hdev->bar0_base + HWS_REG_DEC_MODE);
 
@@ -203,6 +202,7 @@ static int main_ks_thread_handle(void *data)
 static void hws_stop_kthread_action(void *data)
 {
 	struct task_struct *t = data;
+
 	if (!IS_ERR_OR_NULL(t))
 		kthread_stop(t);
 }
@@ -239,7 +239,7 @@ static int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 
 	ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
 	if (ret)
-	    return dev_err_probe(&pdev->dev, ret, "No 32-bit DMA support\n");
+		return dev_err_probe(&pdev->dev, ret, "No 32-bit DMA support\n");
 
 	/* 4) Relaxed Ordering, ReadRQ, etc. if you need them */
 	enable_pcie_relaxed_ordering(pdev);
@@ -356,7 +356,7 @@ static void hws_stop_dsp(struct hws_pcie_dev *hws)
 
 	/* Read the decoder mode/status register */
 	status = readl(hws->bar0_base + HWS_REG_DEC_MODE);
-	dev_dbg(&hws->pdev->dev, "hws_stop_dsp: status=0x%08x\n", status);
+	dev_dbg(&hws->pdev->dev, "%s: status=0x%08x\n", __func__, status);
 
 	/* If the device looks unplugged/stuck, bail out */
 	if (status == 0xFFFFFFFF)
@@ -378,12 +378,14 @@ static void hws_publish_stop_flags(struct hws_pcie_dev *hws)
 
 	for (i = 0; i < hws->cur_max_video_ch; ++i) {
 		struct hws_video *v = &hws->video[i];
+
 		WRITE_ONCE(v->cap_active,     false);
 		WRITE_ONCE(v->stop_requested, true);
 	}
 
 	for (i = 0; i < hws->cur_max_linein_ch; ++i) {
 		struct hws_audio *a = &hws->audio[i];
+
 		WRITE_ONCE(a->stream_running, false);
 		WRITE_ONCE(a->cap_active,     false);
 		WRITE_ONCE(a->stop_requested, true);
@@ -425,12 +427,11 @@ static void hws_drain_after_stop(struct hws_pcie_dev *hws)
 		synchronize_irq(hws->irq);
 }
 
-
 static void hws_stop_device(struct hws_pcie_dev *hws)
 {
 	u32 status = readl(hws->bar0_base + HWS_REG_PIPE_BASE(0));
 
-	dev_dbg(&hws->pdev->dev, "hws_stop_device: status=0x%08x\n", status);
+	dev_dbg(&hws->pdev->dev, "%s: status=0x%08x\n", __func__, status);
 	if (status == 0xFFFFFFFF) {
 		hws->pci_lost = true;
 		goto out;
@@ -445,7 +446,7 @@ static void hws_stop_device(struct hws_pcie_dev *hws)
 
 out:
 	hws->start_run = false;
-	dev_dbg(&hws->pdev->dev, "hws_stop_device: complete\n");
+	dev_dbg(&hws->pdev->dev, "%s: complete\n", __func__);
 }
 
 static void hws_remove(struct pci_dev *pdev)
@@ -540,9 +541,9 @@ static struct pci_driver hws_pci_driver = {
 	.id_table = hws_pci_table,
 	.probe = hws_probe,
 	.remove = hws_remove,
-    .driver = {
-        .pm = HWS_PM_OPS,
-    },
+	.driver = {
+		.pm = HWS_PM_OPS,
+	},
 };
 
 MODULE_DEVICE_TABLE(pci, hws_pci_table);
