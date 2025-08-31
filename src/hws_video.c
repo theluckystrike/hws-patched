@@ -28,7 +28,6 @@
 #include <sound/rawmidi.h>
 #include <sound/initval.h>
 
-#define FRAME_DONE_MARK 0x55AAAA55
 
 static void update_live_resolution(struct hws_pcie_dev *pdx, unsigned int ch);
 static bool hws_update_active_interlace(struct hws_pcie_dev *pdx,
@@ -770,41 +769,39 @@ static int hws_queue_setup(struct vb2_queue *q, unsigned int *num_buffers,
 {
 	struct hws_video *vid = q->drv_priv;
 	struct hws_pcie_dev *hws = vid->parent;
-	size_t size, tmp;
+	size_t size;
 
-	/* One plane: YUYV (2 bytes/pixel). Use current programmed OUT WxH. */
-	if (check_mul_overflow(vid->pix.width, vid->pix.height, &tmp) ||
-	    check_mul_overflow(tmp, 2, &size))
-		return -EOVERFLOW;
-
-	size = PAGE_ALIGN(size);
-	/* One plane: use current sizeimage (bytesperline * height) */
-	size = vid->pix.sizeimage;
-	if (!size) {
-		vid->pix.bytesperline = ALIGN(vid->pix.width * 2, 64);
-		vid->pix.sizeimage = vid->pix.bytesperline * vid->pix.height;
-		size = vid->pix.sizeimage;
+	/* Ensure pix.sizeimage/bytesperline are populated and aligned */
+	if (!vid->pix.sizeimage) {
+		vid->pix.bytesperline = ALIGN(vid->pix.width * 2, 64); /* YUYV = 2 Bpp */
+		vid->pix.sizeimage    = vid->pix.bytesperline * vid->pix.height;
 	}
+	size = PAGE_ALIGN(vid->pix.sizeimage);
 
+	/* If userspace already provided plane info, just validate it. */
 	if (*num_planes) {
-		if (sizes[0] < size)
+		if (*num_planes != 1 || sizes[0] < size)
 			return -EINVAL;
+		/* Accept larger buffers; driver will only use 'size'. */
+		vid->alloc_sizeimage = sizes[0];
 		return 0;
 	}
 
+	/* Advertise our single-plane layout. */
 	*num_planes = 1;
 	sizes[0] = size;
 	vid->alloc_sizeimage = size;
 
 	if (alloc_devs)
-		alloc_devs[0] = &hws->pdev->dev; /* dma-contig device */
+		alloc_devs[0] = &hws->pdev->dev; /* vb2-dma-contig device */
 
-	/* Optional: ensure a minimum number of buffers */
+	/* Make sure we have a reasonable minimum queue depth. */
 	if (*num_buffers < 3)
 		*num_buffers = 3;
 
 	return 0;
 }
+
 
 static int hws_buffer_prepare(struct vb2_buffer *vb)
 {
@@ -900,14 +897,14 @@ static void hws_stop_streaming(struct vb2_queue *q)
 	struct hws_video *v = q->drv_priv;
 	unsigned long flags;
 
-	/* 1) Stop HW first to quiesce further DMA/IRQs for this channel */
-	hws_enable_video_capture(v->parent, v->channel_index, false);
-
-	/* 2) Flip software state */
+	/* 1) Flip software state first so BH becomes a no-op immediately */
 	mutex_lock(&v->state_lock);
 	WRITE_ONCE(v->cap_active, false);
 	WRITE_ONCE(v->stop_requested, true);
 	mutex_unlock(&v->state_lock);
+
+	/* 2) Quiesce hardware next */
+	hws_enable_video_capture(v->parent, v->channel_index, false);
 
 	/* 3) Return in-flight + queued buffers as ERROR */
 	spin_lock_irqsave(&v->irq_lock, flags);
