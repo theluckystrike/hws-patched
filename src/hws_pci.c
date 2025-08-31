@@ -237,13 +237,9 @@ static int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 				     "pcim_iomap_regions BAR0\n");
 	hws->bar0_base = pcim_iomap_table(pdev)[0];
 
-	/* 3) DMA mask (try 64-bit, fall back to 32-bit) */
-	if (dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64))) {
-		ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
-		if (ret)
-			return dev_err_probe(&pdev->dev, ret,
-					     "No suitable DMA mask\n");
-	}
+	ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
+	if (ret)
+	    return dev_err_probe(&pdev->dev, ret, "No 32-bit DMA support\n");
 
 	/* 4) Relaxed Ordering, ReadRQ, etc. if you need them */
 	enable_pcie_relaxed_ordering(pdev);
@@ -375,30 +371,80 @@ static void hws_stop_dsp(struct hws_pcie_dev *hws)
 	writel(0x0, hws->bar0_base + HWS_REG_VCAP_ENABLE);
 }
 
-static void hws_stop_device(struct hws_pcie_dev *hws)
+/* Publish stop so ISR/BH won’t touch ALSA/VB2 anymore. */
+static void hws_publish_stop_flags(struct hws_pcie_dev *hws)
 {
 	unsigned int i;
-	u32 status;
+
+	for (i = 0; i < hws->cur_max_video_ch; ++i) {
+		struct hws_video *v = &hws->video[i];
+		WRITE_ONCE(v->cap_active,     false);
+		WRITE_ONCE(v->stop_requested, true);
+	}
+
+	for (i = 0; i < hws->cur_max_linein_ch; ++i) {
+		struct hws_audio *a = &hws->audio[i];
+		WRITE_ONCE(a->stream_running, false);
+		WRITE_ONCE(a->cap_active,     false);
+		WRITE_ONCE(a->stop_requested, true);
+	}
+
+	smp_wmb(); /* make flags visible before we touch MMIO/queues */
+}
+
+/* Drain engines + ISR/BH after flags are published. */
+static void hws_drain_after_stop(struct hws_pcie_dev *hws)
+{
+	u32 ackmask = 0;
+	unsigned int i;
+
+	/* Mask device enables: no new DMA starts. */
+	writel(0x0, hws->bar0_base + HWS_REG_VCAP_ENABLE);
+	writel(0x0, hws->bar0_base + HWS_REG_ACAP_ENABLE);
+	(void)readl(hws->bar0_base + HWS_REG_INT_STATUS); /* flush */
+
+	/* Let any in-flight DMAs finish (best-effort). */
+	(void)hws_check_busy(hws);
+
+	/* Kill video tasklets to avoid late BH completions. */
+	for (i = 0; i < hws->cur_max_video_ch; ++i)
+		tasklet_kill(&hws->video[i].bh_tasklet);
+
+	/* Ack any latched VDONE/ADONE. */
+	for (i = 0; i < hws->cur_max_video_ch; ++i)
+		ackmask |= HWS_INT_VDONE_BIT(i);
+	for (i = 0; i < hws->cur_max_linein_ch; ++i)
+		ackmask |= HWS_INT_ADONE_BIT(i);
+	if (ackmask) {
+		writel(ackmask, hws->bar0_base + HWS_REG_INT_ACK);
+		(void)readl(hws->bar0_base + HWS_REG_INT_STATUS);
+	}
+
+	/* Ensure no hard IRQ is still running. */
+	if (hws->irq >= 0)
+		synchronize_irq(hws->irq);
+}
+
+
+static void hws_stop_device(struct hws_pcie_dev *hws)
+{
+	u32 status = readl(hws->bar0_base + HWS_REG_PIPE_BASE(0));
+
+	dev_dbg(&hws->pdev->dev, "hws_stop_device: status=0x%08x\n", status);
+	if (status == 0xFFFFFFFF) {
+		hws->pci_lost = true;
+		goto out;
+	}
+
+	/* Make ISR/BH a no-op, then drain engines/IRQ. */
+	hws_publish_stop_flags(hws);
+	hws_drain_after_stop(hws);
 
 	/* 1) Stop the on-board DSP */
 	hws_stop_dsp(hws);
 
-	/* 2) Check for a lost PCI device */
-	status = readl(hws->bar0_base + HWS_REG_PIPE_BASE(0));
-	dev_dbg(&hws->pdev->dev, "hws_stop_device: status=0x%08x\n", status);
-	if (status == 0xFFFFFFFF) {
-		hws->pci_lost = true;
-	} else {
-		/* 3) Tear down each video/audio channel */
-		for (i = 0; i < hws->cur_max_video_ch; ++i) {
-			hws_enable_video_capture(hws, i, false);
-			hws_enable_audio_capture(hws, i, false);
-		}
-	}
-
-	/* 4) Mark the device as no longer running */
+out:
 	hws->start_run = false;
-
 	dev_dbg(&hws->pdev->dev, "hws_stop_device: complete\n");
 }
 
@@ -440,10 +486,6 @@ static int hws_pm_suspend(struct device *dev)
 
 	/* Quiesce hardware (DSP/engines) */
 	hws_stop_device(hws);
-
-	/* Gate interrupts while device is unavailable */
-	if (hws->irq >= 0)
-		disable_irq(hws->irq);
 
 	pci_save_state(pdev);
 	pci_disable_device(pdev);
