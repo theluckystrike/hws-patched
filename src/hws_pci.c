@@ -279,7 +279,7 @@ static int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 	}
 
 	irq = pci_irq_vector(pdev, 0);
-	ret = devm_request_irq(&pdev->dev, irq, irqhandler, IRQF_SHARED,
+	ret = devm_request_irq(&pdev->dev, irq, hws_irq_handler, IRQF_SHARED,
 			       dev_name(&pdev->dev), hws);
 	if (ret) {
 		dev_err(&pdev->dev, "request_irq(%d): %d\n", irq, ret);

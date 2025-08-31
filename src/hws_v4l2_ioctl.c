@@ -129,7 +129,7 @@ int hws_vidioc_enum_dv_timings(struct file *file, void *fh,
 	if (!edv)
 		return -EINVAL;
 
-	if (edv->pad || edv->type != V4L2_DV_BT_656_1120)
+	if (edv->pad)
 		return -EINVAL;
 
 	if (edv->index >= hws_dv_modes_cnt)

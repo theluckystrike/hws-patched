@@ -90,7 +90,7 @@ void hws_bh_video(struct tasklet_struct *t)
 }
 
 
-irqreturn_t irqhandler(int irq, void *info)
+irqreturn_t hws_irq_handler(int irq, void *info)
 {
     struct hws_pcie_dev *pdx = info;
     u32 int_state, ack_mask = 0;
