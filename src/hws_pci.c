@@ -480,6 +480,8 @@ static int hws_pm_suspend(struct device *dev)
 
 	/* Block monitor thread / any hot path from MMIO */
 	WRITE_ONCE(hws->suspended, true);
+	if (hws->irq >= 0)
+		disable_irq(hws->irq);
 
 	/* Gracefully quiesce userspace I/O first */
 	hws_audio_pm_suspend_all(hws);          /* ALSA: stop substreams */
