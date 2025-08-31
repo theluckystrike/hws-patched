@@ -31,7 +31,7 @@ static const struct snd_pcm_hardware audio_pcm_hardware = {
 };
 
 
-void hws_audio_hw_stop(struct hws_pcie_dev *hws, unsigned int ch)
+static void hws_audio_hw_stop(struct hws_pcie_dev *hws, unsigned int ch)
 {
 	if (!hws || ch >= hws->cur_max_linein_ch)
 		return;
