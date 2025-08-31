@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #ifndef HWS_V4L2_IOCTL_H
-#define HWS_V4L2_IOCTL_H 
+#define HWS_V4L2_IOCTL_H
 
 #include <media/v4l2-ctrls.h>
 #include <linux/fs.h>

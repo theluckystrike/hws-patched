@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
+// SPDX-License-Identifier: GPL-2.0-only
 #include <linux/kernel.h>
 #include <linux/string.h>
 #include <linux/pci.h>
@@ -37,12 +37,13 @@ static const size_t hws_dv_modes_cnt = ARRAY_SIZE(hws_dv_modes);
 
 /* YUYV: 16 bpp; align to 64 as you did elsewhere */
 static inline u32 hws_calc_bpl_yuyv(u32 w)     { return ALIGN(w * 2, 64); }
-static inline u32 hws_calc_size_yuyv(u32 w,u32 h) { return hws_calc_bpl_yuyv(w) * h; }
+static inline u32 hws_calc_size_yuyv(u32 w, u32 h) { return hws_calc_bpl_yuyv(w) * h; }
 
 static inline void hws_hw_write_bchs(struct hws_pcie_dev *hws, unsigned int ch,
 				     u8 br, u8 co, u8 hu, u8 sa)
 {
 	u32 packed = (sa << 24) | (hu << 16) | (co << 8) | br;
+
 	if (!hws || !hws->bar0_base || ch >= hws->max_channels)
 		return;
 	writel_relaxed(packed, hws->bar0_base + HWS_REG_BCHS(ch));
@@ -53,8 +54,10 @@ static inline void hws_hw_write_bchs(struct hws_pcie_dev *hws, unsigned int ch,
 static const struct v4l2_dv_timings *hws_match_mode_by_wh(unsigned int w, unsigned int h)
 {
 	size_t i;
+
 	for (i = 0; i < hws_dv_modes_cnt; i++) {
 		const struct v4l2_bt_timings *bt = &hws_dv_modes[i].bt;
+
 		if (bt->width == w && bt->height == h && bt->interlaced == 0)
 			return &hws_dv_modes[i];
 	}
@@ -126,7 +129,7 @@ int hws_vidioc_enum_dv_timings(struct file *file, void *fh,
 	if (!edv)
 		return -EINVAL;
 
-	    if (edv->pad || edv->type != V4L2_DV_BT_656_1120)
+	if (edv->pad || edv->type != V4L2_DV_BT_656_1120)
 		return -EINVAL;
 
 	if (edv->index >= hws_dv_modes_cnt)
@@ -158,6 +161,7 @@ int hws_vidioc_g_dv_timings(struct file *file, void *fh,
 static inline void hws_set_colorimetry_state(struct hws_pix_state *p)
 {
 	bool sd = p->height <= 576;
+
 	p->colorspace   = sd ? V4L2_COLORSPACE_SMPTE170M : V4L2_COLORSPACE_REC709;
 	p->ycbcr_enc    = V4L2_YCBCR_ENC_DEFAULT;
 	p->quantization = V4L2_QUANTIZATION_LIM_RANGE;
@@ -202,9 +206,6 @@ int hws_vidioc_s_dv_timings(struct file *file, void *fh,
 		ret = -EBUSY;
 		goto out_unlock;
 	}
-	/* If you want to hard-apply to HW even while idle, call your helper: */
-	/* hws_video_apply_mode_change(vid->parent, vid->channel_index,
-				      new_w, new_h, interlaced); */
 
 	/* Update software pixel state (and recalc sizes) */
 	vid->pix.width      = new_w;
@@ -249,10 +250,14 @@ int hws_vidioc_dv_timings_cap(struct file *file, void *fh,
 			continue;
 		n++;
 
-		if (bt->width  < min_w) min_w = bt->width;
-		if (bt->height < min_h) min_h = bt->height;
-		if (bt->width  > max_w) max_w = bt->width;
-		if (bt->height > max_h) max_h = bt->height;
+		if (bt->width  < min_w)
+			min_w = bt->width;
+		if (bt->height < min_h)
+			min_h = bt->height;
+		if (bt->width  > max_w)
+			max_w = bt->width;
+		if (bt->height > max_h)
+			max_h = bt->height;
 	}
 
 	/* If the table was empty, fail gracefully. */
@@ -335,8 +340,6 @@ const struct v4l2_ctrl_ops hws_ctrl_ops = {
 	.g_volatile_ctrl = hws_g_volatile_ctrl,
 };
 
-
-
 int hws_vidioc_querycap(struct file *file, void *priv, struct v4l2_capability *cap)
 {
 	struct hws_video *vid = video_drvdata(file);
@@ -352,22 +355,24 @@ int hws_vidioc_querycap(struct file *file, void *priv, struct v4l2_capability *c
 	return 0;
 }
 
-
 int hws_vidioc_enum_fmt_vid_cap(struct file *file, void *priv_fh, struct v4l2_fmtdesc *f)
 {
-	if (f->type != V4L2_BUF_TYPE_VIDEO_CAPTURE) return -EINVAL;
-	if (f->index != 0) return -EINVAL; /* only one format */
+	if (f->type != V4L2_BUF_TYPE_VIDEO_CAPTURE)
+		return -EINVAL;
+	if (f->index != 0)
+		return -EINVAL; /* only one format */
 
 	strscpy(f->description, "YUYV 4:2:2", sizeof(f->description));
 	f->pixelformat = V4L2_PIX_FMT_YUYV;
 	return 0;
 }
 
-
 int hws_vidioc_g_fmt_vid_cap(struct file *file, void *fh, struct v4l2_format *fmt)
 {
 	struct hws_video *vid = video_drvdata(file);
-	if (fmt->type != V4L2_BUF_TYPE_VIDEO_CAPTURE) return -EINVAL;
+
+	if (fmt->type != V4L2_BUF_TYPE_VIDEO_CAPTURE)
+		return -EINVAL;
 
 	fmt->fmt.pix.width        = vid->pix.width;
 	fmt->fmt.pix.height       = vid->pix.height;
@@ -385,6 +390,7 @@ int hws_vidioc_g_fmt_vid_cap(struct file *file, void *fh, struct v4l2_format *fm
 static inline void hws_set_colorimetry_fmt(struct v4l2_pix_format *p)
 {
 	bool sd = p->height <= 576;
+
 	p->colorspace   = sd ? V4L2_COLORSPACE_SMPTE170M : V4L2_COLORSPACE_REC709;
 	p->ycbcr_enc    = V4L2_YCBCR_ENC_DEFAULT;
 	p->quantization = V4L2_QUANTIZATION_LIM_RANGE;
@@ -421,18 +427,24 @@ int hws_vidioc_s_fmt_vid_cap(struct file *file, void *priv, struct v4l2_format *
 
 	mutex_lock(&vid->state_lock);
 
-	if (f->type != V4L2_BUF_TYPE_VIDEO_CAPTURE) return -EINVAL;
+	if (f->type != V4L2_BUF_TYPE_VIDEO_CAPTURE)
+		return -EINVAL;
 
 	/* Normalize the request */
 	ret = hws_vidioc_try_fmt_vid_cap(file, priv, f);
-	if (ret) { mutex_unlock(&vid->state_lock); return ret; }
+	if (ret) {
+		mutex_unlock(&vid->state_lock);
+		return ret;
+	}
 
 	/* Don’t allow size changes while buffers are queued */
 	if (vb2_is_busy(&vid->buffer_queue)) {
 		if (f->fmt.pix.width       != vid->pix.width  ||
 		    f->fmt.pix.height      != vid->pix.height ||
-		    f->fmt.pix.pixelformat != V4L2_PIX_FMT_YUYV)
-			{ mutex_unlock(&vid->state_lock); return -EBUSY; }
+		    f->fmt.pix.pixelformat != V4L2_PIX_FMT_YUYV) {
+			mutex_unlock(&vid->state_lock);
+			return -EBUSY;
+		}
 	}
 
 	/* Apply to driver state */
@@ -465,9 +477,8 @@ int hws_vidioc_g_parm(struct file *file, void *fh, struct v4l2_streamparm *param
 {
 	struct hws_video *vid = video_drvdata(file);
 
-	if (param->type != V4L2_BUF_TYPE_VIDEO_CAPTURE) {
+	if (param->type != V4L2_BUF_TYPE_VIDEO_CAPTURE)
 		return -EINVAL;
-	}
 
 	/* Fixed 60 Hz; expose timeperframe capability */
 	param->parm.capture.capability           = V4L2_CAP_TIMEPERFRAME;
@@ -481,22 +492,22 @@ int hws_vidioc_g_parm(struct file *file, void *fh, struct v4l2_streamparm *param
 }
 
 int hws_vidioc_enum_input(struct file *file, void *priv,
-				 struct v4l2_input *input)
+			  struct v4l2_input *input)
 {
 	if (input->index)
 		return -EINVAL;
-    input->type         = V4L2_INPUT_TYPE_CAMERA;
-    strscpy(input->name, KBUILD_MODNAME, sizeof(input->name));
-    input->capabilities = V4L2_IN_CAP_DV_TIMINGS;
-    input->status       = 0;
+	input->type         = V4L2_INPUT_TYPE_CAMERA;
+	strscpy(input->name, KBUILD_MODNAME, sizeof(input->name));
+	input->capabilities = V4L2_IN_CAP_DV_TIMINGS;
+	input->status       = 0;
 
-    return 0;
+	return 0;
 }
 
 int hws_vidioc_g_input(struct file *file, void *priv, unsigned int *index)
 {
-    *index = 0;
-    return 0;
+	*index = 0;
+	return 0;
 }
 
 int hws_vidioc_s_input(struct file *file, void *priv, unsigned int i)
