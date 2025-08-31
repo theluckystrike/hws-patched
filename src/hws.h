@@ -21,8 +21,7 @@
 
 struct snd_pcm_substream;
 
-struct hwsmem_param 
-{
+struct hwsmem_param {
 	u32 index;
 	u32 type;
 	u32 status;
@@ -49,14 +48,11 @@ struct hws_pcie_dev;
 struct hws_adapter;
 
 struct hwsvideo_buffer {
-    struct vb2_v4l2_buffer vb;   /* must be first */
-    struct list_head       list; /* driver SW queue link */
-    void                  *mem;
+	struct vb2_v4l2_buffer vb;
+	struct list_head       list;
+	void                  *mem;
 };
 
-/* ───────────────────────────────────────────────────────────────────── */
-/*  Per-channel VIDEO state                                             */
-/* ───────────────────────────────────────────────────────────────────── */
 struct hws_video {
 	/* ───── linkage ───── */
 	struct hws_pcie_dev		*parent;		/* parent device */
@@ -65,7 +61,6 @@ struct hws_video {
 	struct vb2_queue			 buffer_queue;
 	struct list_head			 capture_queue;
 	struct hwsvideo_buffer *active;
-
 
 	/* ───── locking ───── */
 	struct mutex			 state_lock;		  /* primary state */
@@ -97,41 +92,40 @@ struct hws_video {
 	u32 alloc_sizeimage;
 
 	/* ───── per-channel capture state ───── */
-	bool					 cap_active;		/* was vcap_started      */
-	bool                     stop_requested;	/* was video_stop        */
+	bool					 cap_active;
+	bool                     stop_requested;
 	u8                      last_buf_half_toggle;
-	bool half_seen; // if your HW uses two half-frame toggles
-    u32  sequence_number;
+	bool half_seen;
+	u32  sequence_number;
 
 	/* ───── misc counters ───── */
-	int						 signal_loss_cnt;	/* no-video counter      */
+	int signal_loss_cnt;
 };
 
 struct hws_audio {
-    /* linkage */
-    struct hws_pcie_dev       *parent;
-    int                        channel_index;
+	/* linkage */
+	struct hws_pcie_dev       *parent;
+	int                        channel_index;
 
-    /* ALSA */
-    struct snd_pcm_substream  *pcm_substream;
+	/* ALSA */
+	struct snd_pcm_substream  *pcm_substream;
 	/* ring geometry (set in prepare/hw_params) */
-	u32 periods;           /* runtime->periods */
-	u32 period_bytes;      /* bytes per period */
-	u32 next_period;       /* SW: next period to program */
+	u32 periods;
+	u32 period_bytes;
+	u32 next_period;
 
-    /* stream state */
-    bool                       cap_active;
-    bool                       stream_running;
-    bool                       stop_requested;
+	/* stream state */
+	bool                       cap_active;
+	bool                       stream_running;
+	bool                       stop_requested;
 
-    /* minimal HW period tracking (optional) */
-    u8                         last_period_toggle;
-    snd_pcm_uframes_t ring_wpos_byframes;
-
-    /* PCM format (for HW programming) */
-    u32                        output_sample_rate;
-    u16                        channel_count;
-    u16                        bits_per_sample;
+	/* minimal HW period tracking  */
+	u8                         last_period_toggle;
+	snd_pcm_uframes_t ring_wpos_byframes;
+	/* PCM format (for HW programming) */
+	u32                        output_sample_rate;
+	u16                        channel_count;
+	u16                        bits_per_sample;
 };
 
 struct hws_pcie_dev {
@@ -174,7 +168,7 @@ struct hws_pcie_dev {
 
 	/* ───── error flags ───── */
 	int                        pci_lost;
-	
+
 };
 
 #endif
