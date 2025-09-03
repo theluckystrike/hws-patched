@@ -41,7 +41,7 @@ static int hws_ctrls_init(struct hws_video *vid)
 	struct v4l2_ctrl_handler *hdl = &vid->control_handler;
 
 	/* Create BCHS + one DV status control */
-	v4l2_ctrl_handler_init(hdl, 5);
+	v4l2_ctrl_handler_init(hdl, 4);
 
 	vid->ctrl_brightness = v4l2_ctrl_new_std(hdl, &hws_ctrl_ops,
 						 V4L2_CID_BRIGHTNESS,
@@ -63,8 +63,6 @@ static int hws_ctrls_init(struct hws_video *vid)
 					  MIN_VAMP_HUE_UNITS,
 					  MAX_VAMP_HUE_UNITS, 1, HWS_HUE_DEFAULT);
 
-	vid->detect_tx_5v_control = v4l2_ctrl_new_std(hdl, &hws_ctrl_ops,
-						      V4L2_CID_DV_RX_POWER_PRESENT, 0, 1, 1, 0);
 
 	if (vid->detect_tx_5v_control)
 		vid->detect_tx_5v_control->flags |= V4L2_CTRL_FLAG_VOLATILE |
@@ -789,20 +787,19 @@ static int hws_queue_setup(struct vb2_queue *q, unsigned int *num_buffers,
 		vid->pix.sizeimage    = vid->pix.bytesperline * vid->pix.height;
 	}
 	size = PAGE_ALIGN(vid->pix.sizeimage);
-
-	/* If userspace already provided plane info, just validate it. */
-	if (*num_planes) {
-		if (*num_planes != 1 || sizes[0] < size)
-			return -EINVAL;
-		/* Accept larger buffers; driver will only use 'size'. */
-		vid->alloc_sizeimage = sizes[0];
-		return 0;
-	}
-
-	/* Advertise our single-plane layout. */
-	*num_planes = 1;
-	sizes[0] = size;
-	vid->alloc_sizeimage = size;
+    if (*nplanes) {
+        if (*nplanes != 1)
+            return -EINVAL;
+        if (!sizes[0])
+            sizes[0] = need;
+        if (sizes[0] < need)
+            return -EINVAL;
+        vid->alloc_sizeimage = sizes[0];
+    } else {
+        *nplanes = 1;
+        sizes[0] = need;
+        vid->alloc_sizeimage = need;
+    }
 
 	if (alloc_devs)
 		alloc_devs[0] = &hws->pdev->dev; /* vb2-dma-contig device */
@@ -857,6 +854,9 @@ static int hws_start_streaming(struct vb2_queue *q, unsigned int count)
 	ret = hws_check_card_status(hws);
 	if (ret)
 		return ret;
+
+    if (!hws_update_active_interlace(hws, v->channel_index))
+        return -ENOLINK;
 
 	/* 2) Must have at least one queued buffer to start */
 	spin_lock_irqsave(&v->irq_lock, flags);

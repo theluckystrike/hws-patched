@@ -255,11 +255,15 @@ static int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 	/* 6) Init channels (explicit unwind on failure is fine here) */
 	for (i = 0; i < hws->max_channels; i++) {
 		ret = hws_video_init_channel(hws, i);
-		if (ret)
+		if (ret) {
+            dev_err(&pdev->dev, "video channel init (ch=%d)", i);
 			goto err_unwind_channels;
+        }
 		ret = hws_audio_init_channel(hws, i);
-		if (ret)
+		if (ret) {
+            dev_err(&pdev->dev, "audio channel init (ch=%d)", i);
 			goto err_unwind_channels;
+        }
 	}
 
 	/* 8) Allocate IRQ vector(s) the modern way; free via devm action */

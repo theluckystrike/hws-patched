@@ -119,7 +119,7 @@ int hws_audio_init_channel(struct hws_pcie_dev *pdev, int ch)
 {
 	struct hws_audio *aud;
 
-	if (!pdev || ch < 0 || ch >= pdev->cur_max_linein_ch)
+	if (!pdev || ch < 0 || ch >= pdev->max_channels)
 		return -EINVAL;
 
 	aud = &pdev->audio[ch];

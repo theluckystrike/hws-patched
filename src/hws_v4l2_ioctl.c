@@ -195,8 +195,7 @@ int hws_vidioc_s_dv_timings(struct file *file, void *fh,
 	new_h = bt->height;
 	interlaced = !!bt->interlaced;
 
-	/* Serialize against concurrent S_FMT/etc. */
-	mutex_lock(&vid->state_lock);
+    lockdep_assert_held(&vid->state_lock);
 
 	/* If vb2 has active buffers and size would change, reject. */
 	was_busy = vb2_is_busy(&vid->buffer_queue);
@@ -204,7 +203,7 @@ int hws_vidioc_s_dv_timings(struct file *file, void *fh,
 	    (new_w != vid->pix.width || new_h != vid->pix.height ||
 	     interlaced != vid->pix.interlaced)) {
 		ret = -EBUSY;
-		goto out_unlock;
+		return ret;
 	}
 
 	/* Update software pixel state (and recalc sizes) */
@@ -222,8 +221,6 @@ int hws_vidioc_s_dv_timings(struct file *file, void *fh,
 	vid->pix.sizeimage    = hws_calc_size_yuyv(new_w, new_h);
 	if (!was_busy)
 		vid->alloc_sizeimage = vid->pix.sizeimage;
-out_unlock:
-	mutex_unlock(&vid->state_lock);
 	return ret;
 }
 
@@ -425,8 +422,6 @@ int hws_vidioc_s_fmt_vid_cap(struct file *file, void *priv, struct v4l2_format *
 	struct hws_video *vid = video_drvdata(file);
 	int ret;
 
-	mutex_lock(&vid->state_lock);
-
 	if (f->type != V4L2_BUF_TYPE_VIDEO_CAPTURE)
 		return -EINVAL;
 
@@ -469,7 +464,6 @@ int hws_vidioc_s_fmt_vid_cap(struct file *file, void *priv, struct v4l2_format *
 	/* Refresh vb2 watermark when idle */
 	if (!vb2_is_busy(&vid->buffer_queue))
 		vid->alloc_sizeimage = vid->pix.sizeimage;
-	mutex_unlock(&vid->state_lock);
 	return 0;
 }
 
@@ -530,9 +524,14 @@ int hws_vidioc_s_parm(struct file *file, void *fh, struct v4l2_streamparm *param
 
 	cap = &param->parm.capture;
 
-	/* Validate input rational; then clamp to what we actually support */
-	if (!cap->timeperframe.numerator || !cap->timeperframe.denominator)
-		return -EINVAL;
+    /* Treat 0/0 as “pick a default”, clamp anything else to 60 Hz */
+    if (!cap->timeperframe.numerator || !cap->timeperframe.denominator) {
+        cap->timeperframe.numerator   = 1;
+        cap->timeperframe.denominator = 60;
+    } else {
+        cap->timeperframe.numerator   = 1;
+        cap->timeperframe.denominator = 60;
+    }
 
 	cap->timeperframe.numerator   = 1;
 	cap->timeperframe.denominator = 60;
