@@ -97,6 +97,7 @@ int hws_video_init_channel(struct hws_pcie_dev *pdev, int ch)
 
 	/* locks & lists */
 	mutex_init(&vid->state_lock);
+    mutex_init(&vid->qlock);
 	spin_lock_init(&vid->irq_lock);
 	INIT_LIST_HEAD(&vid->capture_queue);
 	vid->sequence_number = 0;
@@ -207,6 +208,7 @@ void hws_video_cleanup_channel(struct hws_pcie_dev *pdev, int ch)
 
 	/* 8) Reset simple state (don’t memset the whole struct here) */
 	mutex_destroy(&vid->state_lock);
+	mutex_destroy(&vid->qlock);
 	INIT_LIST_HEAD(&vid->capture_queue);
 	vid->active = NULL;
 	vid->stop_requested = false;
@@ -774,7 +776,7 @@ static u32 hws_calc_sizeimage(struct hws_video *v, u16 w, u16 h,
 }
 
 static int hws_queue_setup(struct vb2_queue *q, unsigned int *num_buffers,
-			   unsigned int *num_planes, unsigned int sizes[],
+			   unsigned int *nplanes, unsigned int sizes[],
 			   struct device *alloc_devs[])
 {
 	struct hws_video *vid = q->drv_priv;
@@ -791,14 +793,14 @@ static int hws_queue_setup(struct vb2_queue *q, unsigned int *num_buffers,
         if (*nplanes != 1)
             return -EINVAL;
         if (!sizes[0])
-            sizes[0] = need;
-        if (sizes[0] < need)
+            sizes[0] = size;
+        if (sizes[0] < size)
             return -EINVAL;
         vid->alloc_sizeimage = sizes[0];
     } else {
         *nplanes = 1;
-        sizes[0] = need;
-        vid->alloc_sizeimage = need;
+        sizes[0] = size;
+        vid->alloc_sizeimage = size;
     }
 
 	if (alloc_devs)
@@ -909,6 +911,9 @@ static void hws_stop_streaming(struct vb2_queue *q)
 {
 	struct hws_video *v = q->drv_priv;
 	unsigned long flags;
+    struct hwsvideo_buffer *b;
+
+    LIST_HEAD(done);
 
 	/* 1) Flip software state first so BH becomes a no-op immediately */
 	mutex_lock(&v->state_lock);
@@ -923,19 +928,19 @@ static void hws_stop_streaming(struct vb2_queue *q)
 	spin_lock_irqsave(&v->irq_lock, flags);
 
 	if (v->active) {
-		vb2_buffer_done(&v->active->vb.vb2_buf, VB2_BUF_STATE_ERROR);
-		v->active = NULL;
+        list_add_tail(&v->active->list, &done);
+        v->active = NULL;
 	}
 
 	while (!list_empty(&v->capture_queue)) {
-		struct hwsvideo_buffer *b = list_first_entry(&v->capture_queue,
-							     struct hwsvideo_buffer,
-							     list);
-		list_del(&b->list);
-		vb2_buffer_done(&b->vb.vb2_buf, VB2_BUF_STATE_ERROR);
+        b = list_first_entry(&v->capture_queue, struct hwsvideo_buffer, list);
+        list_del_init(&b->list);
+        list_add_tail(&b->list, &done);
 	}
 
 	spin_unlock_irqrestore(&v->irq_lock, flags);
+    list_for_each_entry(b, &done, list)
+        vb2_buffer_done(&b->vb.vb2_buf, VB2_BUF_STATE_ERROR);
 }
 
 static const struct vb2_ops hwspcie_video_qops = {
@@ -1008,7 +1013,7 @@ int hws_video_register(struct hws_pcie_dev *dev)
 		q->ops = &hwspcie_video_qops; /* your vb2_ops */
 		q->mem_ops = &vb2_dma_contig_memops;
 		q->timestamp_flags = V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC;
-		q->lock = &ch->state_lock; /* reuse state_lock */
+		q->lock = &ch->qlock;
 		q->dev = &dev->pdev->dev;
 
 		ret = vb2_queue_init(q);

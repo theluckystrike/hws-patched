@@ -195,7 +195,7 @@ int hws_vidioc_s_dv_timings(struct file *file, void *fh,
 	new_h = bt->height;
 	interlaced = !!bt->interlaced;
 
-    lockdep_assert_held(&vid->state_lock);
+    lockdep_assert_held(&vid->qlock);
 
 	/* If vb2 has active buffers and size would change, reject. */
 	was_busy = vb2_is_busy(&vid->buffer_queue);
@@ -427,17 +427,14 @@ int hws_vidioc_s_fmt_vid_cap(struct file *file, void *priv, struct v4l2_format *
 
 	/* Normalize the request */
 	ret = hws_vidioc_try_fmt_vid_cap(file, priv, f);
-	if (ret) {
-		mutex_unlock(&vid->state_lock);
+	if (ret)
 		return ret;
-	}
 
 	/* Don’t allow size changes while buffers are queued */
 	if (vb2_is_busy(&vid->buffer_queue)) {
 		if (f->fmt.pix.width       != vid->pix.width  ||
 		    f->fmt.pix.height      != vid->pix.height ||
 		    f->fmt.pix.pixelformat != V4L2_PIX_FMT_YUYV) {
-			mutex_unlock(&vid->state_lock);
 			return -EBUSY;
 		}
 	}
