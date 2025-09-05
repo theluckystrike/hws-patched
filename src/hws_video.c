@@ -28,6 +28,8 @@
 #include <sound/rawmidi.h>
 #include <sound/initval.h>
 
+#define HWS_MAX_BUFS 32
+
 static void update_live_resolution(struct hws_pcie_dev *pdx, unsigned int ch);
 static bool hws_update_active_interlace(struct hws_pcie_dev *pdx,
 					unsigned int ch);
@@ -222,6 +224,21 @@ static inline struct hwsvideo_buffer *to_hwsbuf(struct vb2_buffer *vb)
 {
 	return container_of(to_vb2_v4l2_buffer(vb), struct hwsvideo_buffer, vb);
 }
+
+static int hws_buf_init(struct vb2_buffer *vb)
+{
+    struct hwsvideo_buffer *b = to_hwsbuf(vb);
+    INIT_LIST_HEAD(&b->list);
+    return 0;
+}
+
+static void hws_buf_cleanup(struct vb2_buffer *vb)
+{
+    struct hwsvideo_buffer *b = to_hwsbuf(vb);
+    if (!list_empty(&b->list))
+        list_del_init(&b->list);
+}
+
 
 void hws_program_video_from_vb2(struct hws_pcie_dev *hws, unsigned int ch,
 				struct vb2_buffer *vb)
@@ -807,16 +824,22 @@ static int hws_queue_setup(struct vb2_queue *q, unsigned int *num_buffers,
 		alloc_devs[0] = &hws->pdev->dev; /* vb2-dma-contig device */
 
 	/* Make sure we have a reasonable minimum queue depth. */
-	if (*num_buffers < 3)
-		*num_buffers = 3;
+	if (*num_buffers < 1)
+		*num_buffers = 1;
 
+    unsigned int have = vb2_get_num_buffers(q);   /* instead of q->num_buffers */
+    unsigned int room = (HWS_MAX_BUFS > have) ? (HWS_MAX_BUFS - have) : 0;
+    if (*num_buffers > room)
+        *num_buffers = room;
+    if (*num_buffers == 0)
+        return -ENOBUFS;   /* or -ENOMEM; either is fine for CREATE_BUFS clamp */
 	return 0;
 }
 
 static int hws_buffer_prepare(struct vb2_buffer *vb)
 {
 	struct hws_video *vid = vb->vb2_queue->drv_priv;
-	size_t need = vid->pix.sizeimage;
+	size_t need = PAGE_ALIGN(vid->pix.sizeimage);
 
 	if (vb2_plane_size(vb, 0) < vid->alloc_sizeimage)
 		return -EINVAL;
@@ -836,6 +859,7 @@ static void hws_buffer_queue(struct vb2_buffer *vb)
 
 	/* If streaming and no in-flight buffer, prime HW immediately */
 	if (vid->cap_active && !vid->active) {
+        list_del_init(&buf->list);
 		vid->active = buf;
 		hws_program_video_from_vb2(vid->parent, vid->channel_index,
 					   &buf->vb.vb2_buf);
@@ -856,9 +880,7 @@ static int hws_start_streaming(struct vb2_queue *q, unsigned int count)
 	ret = hws_check_card_status(hws);
 	if (ret)
 		return ret;
-
-    if (!hws_update_active_interlace(hws, v->channel_index))
-        return -ENOLINK;
+    (void)hws_update_active_interlace(hws, v->channel_index);
 
 	/* 2) Must have at least one queued buffer to start */
 	spin_lock_irqsave(&v->irq_lock, flags);
@@ -946,6 +968,8 @@ static void hws_stop_streaming(struct vb2_queue *q)
 static const struct vb2_ops hwspcie_video_qops = {
 	.queue_setup = hws_queue_setup,
 	.buf_prepare = hws_buffer_prepare,
+    .buf_init        = hws_buf_init,
+    .buf_cleanup     = hws_buf_cleanup,
 	// .buf_finish = hws_buffer_finish,
 	.buf_queue = hws_buffer_queue,
 	.wait_prepare = vb2_ops_wait_prepare,
@@ -1014,6 +1038,8 @@ int hws_video_register(struct hws_pcie_dev *dev)
 		q->mem_ops = &vb2_dma_contig_memops;
 		q->timestamp_flags = V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC;
 		q->lock = &ch->qlock;
+        q->max_num_buffers = HWS_MAX_BUFS;
+        q->allow_cache_hints = 1;
 		q->dev = &dev->pdev->dev;
 
 		ret = vb2_queue_init(q);
