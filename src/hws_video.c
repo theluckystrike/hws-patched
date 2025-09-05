@@ -798,26 +798,28 @@ static int hws_queue_setup(struct vb2_queue *q, unsigned int *num_buffers,
 {
 	struct hws_video *vid = q->drv_priv;
 	struct hws_pcie_dev *hws = vid->parent;
-	size_t size;
+    size_t need_min   = vid->pix.sizeimage;
+    size_t need_alloc = PAGE_ALIGN(vid->pix.sizeimage);
 
-	/* Ensure pix.sizeimage/bytesperline are populated and aligned */
-	if (!vid->pix.sizeimage) {
-		vid->pix.bytesperline = ALIGN(vid->pix.width * 2, 64); /* YUYV = 2 Bpp */
-		vid->pix.sizeimage    = vid->pix.bytesperline * vid->pix.height;
-	}
-	size = PAGE_ALIGN(vid->pix.sizeimage);
+    if (!need_min) {
+        vid->pix.bytesperline = ALIGN(vid->pix.width * 2, 64);
+        vid->pix.sizeimage    = vid->pix.bytesperline * vid->pix.height;
+        need_min   = vid->pix.sizeimage;
+        need_alloc = PAGE_ALIGN(vid->pix.sizeimage);
+    } 
+
     if (*nplanes) {
         if (*nplanes != 1)
             return -EINVAL;
         if (!sizes[0])
-            sizes[0] = size;
-        if (sizes[0] < size)
+            sizes[0] = need_min;            // publish minimal, not page-aligned
+        if (sizes[0] < need_min)
             return -EINVAL;
-        vid->alloc_sizeimage = sizes[0];
+        vid->alloc_sizeimage = need_alloc;  // keep internal aligned size
     } else {
         *nplanes = 1;
-        sizes[0] = size;
-        vid->alloc_sizeimage = size;
+        sizes[0] = need_min;                // report minimal requirement
+        vid->alloc_sizeimage = need_alloc;
     }
 
 	if (alloc_devs)
@@ -831,8 +833,10 @@ static int hws_queue_setup(struct vb2_queue *q, unsigned int *num_buffers,
     unsigned int room = (HWS_MAX_BUFS > have) ? (HWS_MAX_BUFS - have) : 0;
     if (*num_buffers > room)
         *num_buffers = room;
-    if (*num_buffers == 0)
+    if (*num_buffers == 0) {
+        pr_debug("queue_setup: reject, no room (have=%u, max=%u)\n", have, HWS_MAX_BUFS);
         return -ENOBUFS;   /* or -ENOMEM; either is fine for CREATE_BUFS clamp */
+    }
 	return 0;
 }
 
