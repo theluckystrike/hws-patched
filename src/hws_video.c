@@ -875,62 +875,53 @@ static void hws_buffer_queue(struct vb2_buffer *vb)
 
 static int hws_start_streaming(struct vb2_queue *q, unsigned int count)
 {
-	struct hws_video *v = q->drv_priv;
-	struct hws_pcie_dev *hws = v->parent;
-	unsigned long flags;
-	int en, ret;
+    struct hws_video *v = q->drv_priv;
+    struct hws_pcie_dev *hws = v->parent;
+    struct hwsvideo_buffer *to_program = NULL;   // local copy
+    unsigned long flags;
+    int en, ret;
 
-	/* 1) Card/device sanity */
-	ret = hws_check_card_status(hws);
-	if (ret)
-		return ret;
+    ret = hws_check_card_status(hws);
+    if (ret)
+        return ret;
     (void)hws_update_active_interlace(hws, v->channel_index);
 
-	/* 2) Must have at least one queued buffer to start */
-	spin_lock_irqsave(&v->irq_lock, flags);
-	if (list_empty(&v->capture_queue)) {
-		spin_unlock_irqrestore(&v->irq_lock, flags);
-		return -ENOSPC;
-	}
+    /* init per-stream state */
+    WRITE_ONCE(v->stop_requested, false);
+    WRITE_ONCE(v->last_buf_half_toggle, 0);
+    v->half_seen = false;
 
-	/* (Re)init per-stream state visible to IRQ/BH */
-	WRITE_ONCE(v->stop_requested, false);
-	WRITE_ONCE(v->last_buf_half_toggle, 0);
-	v->half_seen = false;
+    /* Try to prime a buffer, but it's OK if none are queued yet */
+    spin_lock_irqsave(&v->irq_lock, flags);
+    if (!v->active && !list_empty(&v->capture_queue)) {
+        to_program = list_first_entry(&v->capture_queue,
+                                      struct hwsvideo_buffer, list);
+        list_del(&to_program->list);
+        v->active = to_program;
+    }
+    spin_unlock_irqrestore(&v->irq_lock, flags);
 
-	/* 3) Prime first buffer if nothing in-flight */
-	if (!v->active) {
-		struct hwsvideo_buffer *first;
+    /* Only program/enable HW if we actually have a buffer */
+    if (to_program) {
+        wmb();
+        hws_program_video_from_vb2(hws, v->channel_index,
+                                   &to_program->vb.vb2_buf);
 
-		first = list_first_entry(&v->capture_queue,
-					 struct hwsvideo_buffer, list);
-		list_del(&first->list);
-		v->active = first;
+        (void)readl(hws->bar0_base + HWS_REG_INT_STATUS); /* flush posted writes */
 
-		/* Make sure any CPU writes (if any) are visible before doorbell */
-		wmb();
-		hws_program_video_from_vb2(hws, v->channel_index,
-					   &first->vb.vb2_buf);
-	}
-	spin_unlock_irqrestore(&v->irq_lock, flags);
+        en = check_video_capture(hws, v->channel_index);
+        if (en < 0)
+            return en;
+        if (en == 0)
+            hws_enable_video_capture(hws, v->channel_index, true);
+    }
 
-	/* 4) Ensure HW capture is enabled for this channel.
-	 *    Do this after programming the buffer; flush posted writes first.
-	 */
-	(void)readl(hws->bar0_base + HWS_REG_INT_STATUS); /* flush PCI writes */
+    /* Now we’re logically streaming: future QBUF will kick HW if needed */
+    mutex_lock(&v->state_lock);
+    WRITE_ONCE(v->cap_active, true);
+    mutex_unlock(&v->state_lock);
 
-	en = check_video_capture(hws, v->channel_index);
-	if (en < 0)
-		return en;
-	if (en == 0)
-		hws_enable_video_capture(hws, v->channel_index, true);
-
-	/* 5) Publish running state */
-	mutex_lock(&v->state_lock);
-	WRITE_ONCE(v->cap_active, true);
-	mutex_unlock(&v->state_lock);
-
-	return 0;
+    return 0;
 }
 
 static void hws_stop_streaming(struct vb2_queue *q)

@@ -50,7 +50,6 @@ struct hws_adapter;
 struct hwsvideo_buffer {
 	struct vb2_v4l2_buffer vb;
 	struct list_head       list;
-	void                  *mem;
 };
 
 struct hws_video {
