@@ -10,6 +10,8 @@
 #include <linux/dma-mapping.h>
 #include <linux/pm.h>
 #include <linux/freezer.h>
+#include <linux/pci_regs.h>
+#include <linux/seq_file.h>
 
 #include <media/v4l2-ctrls.h>
 
@@ -207,11 +209,142 @@ static void hws_stop_kthread_action(void *data)
 		kthread_stop(t);
 }
 
+static void hws_dump_irq_regs(struct hws_pcie_dev *hws, const char *tag)
+{
+	u32 ien = 0, ist = 0, vcap = 0, dec = 0, sys = 0;
+	if (!hws || !hws->bar0_base)
+		return;
+	sys  = readl(hws->bar0_base + HWS_REG_SYS_STATUS);
+	dec  = readl(hws->bar0_base + HWS_REG_DEC_MODE);
+	ien  = readl(hws->bar0_base + INT_EN_REG_BASE);
+	ist  = readl(hws->bar0_base + HWS_REG_INT_STATUS);
+	vcap = readl(hws->bar0_base + HWS_REG_VCAP_ENABLE);
+	dev_info(&hws->pdev->dev,
+		 "[%s] SYS=0x%08x DEC=0x%08x INT_EN=0x%08x INT_STATUS=0x%08x VCAP_EN=0x%08x\n",
+		 tag ? tag : "dump", sys, dec, ien, ist, vcap);
+}
+
+static void hws_try_enable_irqs(struct hws_pcie_dev *hws, const char *where)
+{
+	u32 before, after;
+	if (!hws || !hws->bar0_base)
+		return;
+
+	/* If core not RUN/READY, kick the standard bring-up once. */
+	if (!(readl(hws->bar0_base + HWS_REG_SYS_STATUS) & BIT(0))) {
+		dev_info(&hws->pdev->dev, "[%s] SYS_STATUS not ready; init video core\n",
+			 where ? where : "irqen");
+		hws_init_video_sys(hws, true);
+	}
+
+	before = readl(hws->bar0_base + INT_EN_REG_BASE);
+	writel(0x003FFFFF, hws->bar0_base + INT_EN_REG_BASE);
+	/* flush posted write */
+	after  = readl(hws->bar0_base + INT_EN_REG_BASE);
+	dev_info(&hws->pdev->dev, "[%s] INT_EN before=0x%08x after=0x%08x\n",
+		 where ? where : "irqen", before, after);
+
+	if (after != 0x003FFFFF) {
+		dev_warn(&hws->pdev->dev,
+			 "[%s] WARNING: INT_EN didn’t latch (0x%08x). Register may be write-locked pre-RUN or offset is wrong.\n",
+			 where ? where : "irqen", after);
+	}
+}
+
+static int hws_alloc_seed_buffers(struct hws_pcie_dev *hws)
+{
+	int ch;
+	/* 64 KiB is plenty for a safe dummy; align to 64 for your HW */
+	const size_t need = ALIGN(64 * 1024, 64);
+
+	for (ch = 0; ch < hws->cur_max_video_ch; ch++) {
+#if defined(CONFIG_HAS_DMA) /* normal on PCIe platforms */
+		void *cpu = dma_alloc_coherent(&hws->pdev->dev, need,
+					       &hws->scratch_vid[ch].dma,
+					       GFP_KERNEL);
+#else
+		void *cpu = NULL;
+#endif
+		if (!cpu) {
+			dev_warn(&hws->pdev->dev,
+				 "scratch: dma_alloc_coherent failed ch=%d\n", ch);
+			/* not fatal: free earlier ones and continue without seeding */
+			while (--ch >= 0) {
+				if (hws->scratch_vid[ch].cpu)
+					dma_free_coherent(&hws->pdev->dev,
+							  hws->scratch_vid[ch].size,
+							  hws->scratch_vid[ch].cpu,
+							  hws->scratch_vid[ch].dma);
+				hws->scratch_vid[ch].cpu = NULL;
+				hws->scratch_vid[ch].size = 0;
+			}
+			return -ENOMEM;
+		}
+		hws->scratch_vid[ch].cpu  = cpu;
+		hws->scratch_vid[ch].size = need;
+	}
+	return 0;
+}
+
+static void hws_free_seed_buffers(struct hws_pcie_dev *hws)
+{
+	int ch;
+	for (ch = 0; ch < hws->cur_max_video_ch; ch++) {
+		if (hws->scratch_vid[ch].cpu) {
+			dma_free_coherent(&hws->pdev->dev, hws->scratch_vid[ch].size,
+			                  hws->scratch_vid[ch].cpu, hws->scratch_vid[ch].dma);
+			hws->scratch_vid[ch].cpu = NULL;
+			hws->scratch_vid[ch].size = 0;
+		}
+	}
+}
+
+static void hws_seed_channel(struct hws_pcie_dev *hws, int ch)
+{
+	dma_addr_t paddr = hws->scratch_vid[ch].dma;
+	u32 lo = lower_32_bits(paddr);
+	u32 hi = upper_32_bits(paddr);
+	u32 pci_addr = lo & PCI_E_BAR_ADD_LOWMASK;
+
+	lo &= PCI_E_BAR_ADD_MASK;
+
+	/* Program 64-bit BAR remap entry for this channel (table @ 0x208 + ch*8) */
+	writel_relaxed(hi, hws->bar0_base + PCI_ADDR_TABLE_BASE + 0x208 + ch*8);
+	writel_relaxed(lo, hws->bar0_base + PCI_ADDR_TABLE_BASE + 0x208 + ch*8 + PCIE_BARADDROFSIZE);
+
+	/* Program capture engine per-channel base/half */
+	writel_relaxed((ch + 1) * PCIEBAR_AXI_BASE + pci_addr,
+	               hws->bar0_base + CVBS_IN_BUF_BASE + ch * PCIE_BARADDROFSIZE);
+
+	/* half size: use either the current format’s half or half of scratch */
+	{
+		u32 half = hws->video[ch].pix.half_size ?
+		           hws->video[ch].pix.half_size :
+		           (u32)(hws->scratch_vid[ch].size / 2);
+		writel_relaxed(half / 16,
+		               hws->bar0_base + CVBS_IN_BUF_BASE2 + ch * PCIE_BARADDROFSIZE);
+	}
+
+	(void)readl(hws->bar0_base + HWS_REG_INT_STATUS); /* flush posted writes */
+}
+
+static void hws_seed_all_channels(struct hws_pcie_dev *hws)
+{
+	int ch;
+	for (ch = 0; ch < hws->cur_max_video_ch; ch++) {
+		if (hws->scratch_vid[ch].cpu)
+			hws_seed_channel(hws, ch);
+	}
+}
+
+
+
 static int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 {
 	struct hws_pcie_dev *hws;
-	void __iomem *bar0;
 	int i, ret, nvec, irq;
+	unsigned long irqf = 0;
+	bool has_msix_cap, has_msi_cap, using_msi;
 
 	/* devres-backed device object */
 	hws = devm_kzalloc(&pdev->dev, sizeof(*hws), GFP_KERNEL);
@@ -223,76 +356,104 @@ static int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 	hws->suspended = false;
 	pci_set_drvdata(pdev, hws);
 
-	/* 1) Managed enable + bus mastering */
+	/* 1) Enable device + bus mastering */
 	ret = pcim_enable_device(pdev);
 	if (ret)
 		return dev_err_probe(&pdev->dev, ret, "pcim_enable_device\n");
 
 	pci_set_master(pdev);
 
-	/* 2) Map BAR0 with PCIM (auto request_regions + iounmap on detach) */
+	/* 2) Map BAR0 (managed) */
 	ret = pcim_iomap_regions(pdev, BIT(0), KBUILD_MODNAME);
 	if (ret)
-		return dev_err_probe(&pdev->dev, ret,
-				     "pcim_iomap_regions BAR0\n");
+		return dev_err_probe(&pdev->dev, ret, "pcim_iomap_regions BAR0\n");
 	hws->bar0_base = pcim_iomap_table(pdev)[0];
 
 	ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
 	if (ret)
 		return dev_err_probe(&pdev->dev, ret, "No 32-bit DMA support\n");
 
-	/* 4) Relaxed Ordering, ReadRQ, etc. if you need them */
+	/* 3) Optional PCIe tuning */
 	enable_pcie_relaxed_ordering(pdev);
 #ifdef CONFIG_ARCH_TI816X
 	pcie_set_readrq(pdev, 128);
 #endif
 
-	/* 5) Identify chip & set capabilities */
+	/* 4) Identify chip & capabilities */
 	read_chip_id(hws);
+	dev_info(&pdev->dev, "Device VID=0x%04x DID=0x%04x\n", pdev->vendor, pdev->device);
 
-	dev_info(&pdev->dev, "Device VID=0x%04x, DID=0x%04x\n", pdev->vendor,
-		 pdev->device);
-	/* 6) Init channels (explicit unwind on failure is fine here) */
+	/* 5) Init channels */
 	for (i = 0; i < hws->max_channels; i++) {
 		ret = hws_video_init_channel(hws, i);
 		if (ret) {
-            dev_err(&pdev->dev, "video channel init (ch=%d)", i);
+			dev_err(&pdev->dev, "video channel init failed (ch=%d)\n", i);
 			goto err_unwind_channels;
-        }
+		}
 		ret = hws_audio_init_channel(hws, i);
 		if (ret) {
-            dev_err(&pdev->dev, "audio channel init (ch=%d)", i);
+			dev_err(&pdev->dev, "audio channel init failed (ch=%d)\n", i);
 			goto err_unwind_channels;
-        }
+		}
 	}
 
-	/* 8) Allocate IRQ vector(s) the modern way; free via devm action */
-	nvec = pci_alloc_irq_vectors(pdev, 1, 1,
-				     PCI_IRQ_ALL_TYPES | PCI_IRQ_AFFINITY);
+	ret = hws_alloc_seed_buffers(hws);
+	if (ret) {
+		dev_warn(&pdev->dev, "continuing without scratch seed buffers\n");
+		/* not fatal, but you won’t have seeded BARs until first QBUF */
+	} else {
+		hws_seed_all_channels(hws);
+	}
+
+	/* 6) IRQ vectors (1 vector), with robust logging */
+	nvec = pci_alloc_irq_vectors(pdev, 1, 1, PCI_IRQ_ALL_TYPES | PCI_IRQ_AFFINITY);
 	if (nvec < 0) {
 		ret = nvec;
 		dev_err(&pdev->dev, "pci_alloc_irq_vectors: %d\n", ret);
 		goto err_unwind_channels;
 	}
-	ret = devm_add_action_or_reset(&pdev->dev, hws_free_irq_vectors_action,
-				       pdev);
+	ret = devm_add_action_or_reset(&pdev->dev, hws_free_irq_vectors_action, pdev);
 	if (ret) {
-		dev_err(&pdev->dev, "devm_add_action: free_irq_vectors: %d\n",
-			ret);
-		goto err_unwind_channels; /* add_action already called reset */
+		dev_err(&pdev->dev, "devm_add_action free_irq_vectors: %d\n", ret);
+		goto err_unwind_channels; /* reset already freed vectors */
 	}
+
+	has_msix_cap = !!pci_find_capability(pdev, PCI_CAP_ID_MSIX);
+	has_msi_cap  = !!pci_find_capability(pdev, PCI_CAP_ID_MSI);
+	using_msi    = pci_dev_msi_enabled(pdev); /* true if MSI (not MSI-X) is actually enabled */
+
+	dev_info(&pdev->dev,
+		 "irq vectors=%d (caps: msix=%d msi=%d) using=%s/INTx\n",
+		 nvec, has_msix_cap, has_msi_cap,
+		 using_msi ? "MSI" : (has_msix_cap ? "MSI-X (likely)" : "none"));
+
+	/* 7) Decide IRQ flags: use IRQF_SHARED only on legacy INTx */
+	if (!has_msix_cap && !has_msi_cap && !using_msi) {
+		pci_intx(pdev, 1);
+		irqf = IRQF_SHARED;
+		dev_info(&pdev->dev, "IRQ mode: legacy INTx (shared)\n");
+	} else {
+		irqf = 0; /* MSI / MSI-X are not shared */
+		dev_info(&pdev->dev, "IRQ mode: %s\n", using_msi ? "MSI" : "MSI-X");
+	}
+
+    hws_init_video_sys(hws, false);
 
 	irq = pci_irq_vector(pdev, 0);
-	ret = devm_request_irq(&pdev->dev, irq, hws_irq_handler, IRQF_SHARED,
-			       dev_name(&pdev->dev), hws);
+	dev_info(&pdev->dev, "requesting irq=%d irqf=0x%lx\n", irq, irqf);
+
+	ret = devm_request_irq(&pdev->dev, irq, hws_irq_handler, irqf, dev_name(&pdev->dev), hws);
 	if (ret) {
-		dev_err(&pdev->dev, "request_irq(%d): %d\n", irq, ret);
+		dev_err(&pdev->dev, "request_irq(%d) failed: %d\n", irq, ret);
 		goto err_unwind_channels;
 	}
-
 	hws->irq = irq;
 
-	/* 10) Register V4L2/ALSA */
+	/* 8) Dump, bring up core if needed, try to enable device IRQs, dump again */
+	hws_dump_irq_regs(hws, "post-request_irq");
+	hws_try_enable_irqs(hws, "probe");
+	hws_dump_irq_regs(hws, "after-enable-irqs");
+	/* 9) Register V4L2/ALSA */
 	ret = hws_video_register(hws);
 	if (ret) {
 		dev_err(&pdev->dev, "video_register: %d\n", ret);
@@ -305,7 +466,7 @@ static int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 		goto err_unwind_channels;
 	}
 
-	/* 11) Background monitor thread (managed stop via devm action) */
+	/* 10) Background monitor thread (managed) */
 	hws->main_task = kthread_run(main_ks_thread_handle, hws, "hws-mon");
 	if (IS_ERR(hws->main_task)) {
 		ret = PTR_ERR(hws->main_task);
@@ -313,12 +474,21 @@ static int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 		dev_err(&pdev->dev, "kthread_run: %d\n", ret);
 		goto err_unregister_va;
 	}
-	ret = devm_add_action_or_reset(&pdev->dev, hws_stop_kthread_action,
-				       hws->main_task);
+	ret = devm_add_action_or_reset(&pdev->dev, hws_stop_kthread_action, hws->main_task);
 	if (ret) {
-		dev_err(&pdev->dev, "devm_add_action: kthread_stop: %d\n", ret);
+		dev_err(&pdev->dev, "devm_add_action kthread_stop: %d\n", ret);
 		goto err_unregister_va; /* reset already stopped the thread */
 	}
+
+	/* 11) Final: show the line is armed */
+	dev_info(&pdev->dev, "irq handler installed on irq=%d\n", irq);
+
+	/* Optional: if your HW requires enabling global IRQs, do it here.
+	 * Example (uncomment if appropriate for your device):
+	 *   writel(0x3FFFFF, hws->bar0_base + INT_EN_REG_BASE);
+	 *   dev_info(&pdev->dev, "INT_EN set to 0x%08x\n",
+	 *            readl(hws->bar0_base + INT_EN_REG_BASE));
+	 */
 
 	return 0;
 
@@ -327,7 +497,7 @@ err_unregister_va:
 	hws_audio_unregister(hws);
 	hws_video_unregister(hws);
 err_unwind_channels:
-	/* explicit per-channel teardown for any initted channels */
+    hws_free_seed_buffers(hws);
 	while (--i >= 0) {
 		hws_video_cleanup_channel(hws, i);
 		hws_audio_cleanup_channel(hws, i, true);

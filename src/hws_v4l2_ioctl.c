@@ -396,26 +396,59 @@ static inline void hws_set_colorimetry_fmt(struct v4l2_pix_format *p)
 
 int hws_vidioc_try_fmt_vid_cap(struct file *file, void *fh, struct v4l2_format *f)
 {
-	struct v4l2_pix_format *pix = &f->fmt.pix;
-	const struct v4l2_dv_timings *t;
+    struct v4l2_pix_format *pix = &f->fmt.pix;
+    u32 req_w = pix->width, req_h = pix->height;
+    u32 w, h, min_bpl, bpl;
+    size_t size; /* wider than u32 for overflow check */
 
-	if (f->type != V4L2_BUF_TYPE_VIDEO_CAPTURE)
-		return -EINVAL;
+    if (f->type != V4L2_BUF_TYPE_VIDEO_CAPTURE)
+        return -EINVAL;
 
-	pix->pixelformat = V4L2_PIX_FMT_YUYV;
+    /* Only YUYV */
+    pix->pixelformat = V4L2_PIX_FMT_YUYV;
 
-	t = hws_match_mode_by_wh(pix->width, pix->height);
-	if (!t)
-		t = &hws_dv_modes[0];
+    /* Defaults then clamp */
+    w = (req_w ? req_w : 640);
+    h = (req_h ? req_h : 480);
+    if (w > MAX_VIDEO_HW_W) w = MAX_VIDEO_HW_W;
+    if (h > MAX_VIDEO_HW_H) h = MAX_VIDEO_HW_H;
+    if (!w) w = 640;  /* hard fallback in case macros are odd */
+    if (!h) h = 480;
 
-	pix->width        = t->bt.width;
-	pix->height       = t->bt.height;
-	pix->field        = V4L2_FIELD_NONE;
-	pix->bytesperline = hws_calc_bpl_yuyv(pix->width);
-	pix->sizeimage    = hws_calc_size_yuyv(pix->width, pix->height);
-	hws_set_colorimetry_fmt(pix);
-	return 0;
+    /* Field policy */
+    pix->field = V4L2_FIELD_NONE;
+
+    /* Stride policy for packed 16bpp, 64B align */
+    min_bpl = ALIGN(w * 2, 64);
+
+    /* Bound requested bpl to something sane, then align */
+    bpl = pix->bytesperline;
+    if (bpl < min_bpl)
+        bpl = min_bpl;
+    else {
+        /* Cap at 16x width to avoid silly values that overflow sizeimage */
+        u32 max_bpl = ALIGN(w * 2 * 16, 64);
+        if (bpl > max_bpl)
+            bpl = max_bpl;
+        bpl = ALIGN(bpl, 64);
+    }
+
+    /* Overflow-safe sizeimage = bpl * h */
+    if (__builtin_mul_overflow((size_t)bpl, (size_t)h, &size) || size == 0)
+        return -ERANGE; /* compliance-friendly: reject impossible requests */
+
+    pix->width        = w;
+    pix->height       = h;
+    pix->bytesperline = bpl;
+    pix->sizeimage    = (u32)size; /* logical size, not page-aligned */
+
+    hws_set_colorimetry_fmt(pix);
+    pr_debug("try_fmt: w=%u h=%u bpl=%u size=%u field=%u\n",
+             pix->width, pix->height, pix->bytesperline,
+             pix->sizeimage, pix->field);
+    return 0;
 }
+
 
 int hws_vidioc_s_fmt_vid_cap(struct file *file, void *priv, struct v4l2_format *f)
 {
@@ -450,8 +483,8 @@ int hws_vidioc_s_fmt_vid_cap(struct file *file, void *priv, struct v4l2_format *
 	vid->pix.xfer_func    = f->fmt.pix.xfer_func;
 
 	/* Update sizes (use helper if you prefer strict alignment math) */
-	vid->pix.bytesperline = hws_calc_bpl_yuyv(vid->pix.width);
-	vid->pix.sizeimage    = hws_calc_size_yuyv(vid->pix.width, vid->pix.height);
+    vid->pix.bytesperline = f->fmt.pix.bytesperline;          /* aligned */
+    vid->pix.sizeimage    = f->fmt.pix.sizeimage;             /* logical */
 	vid->pix.half_size    = vid->pix.sizeimage / 2;
 	vid->pix.interlaced   = false;
 	/* Or:
@@ -460,7 +493,11 @@ int hws_vidioc_s_fmt_vid_cap(struct file *file, void *priv, struct v4l2_format *
 
 	/* Refresh vb2 watermark when idle */
 	if (!vb2_is_busy(&vid->buffer_queue))
-		vid->alloc_sizeimage = vid->pix.sizeimage;
+		vid->alloc_sizeimage = PAGE_ALIGN(vid->pix.sizeimage);
+    pr_debug("s_fmt:   w=%u h=%u bpl=%u size=%u alloc=%u\n",
+         vid->pix.width, vid->pix.height, vid->pix.bytesperline,
+         vid->pix.sizeimage, vid->alloc_sizeimage);
+
 	return 0;
 }
 

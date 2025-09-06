@@ -128,6 +128,13 @@ struct hws_audio {
 	u16                        bits_per_sample;
 };
 
+struct hws_scratch_dma {
+	void       *cpu;
+	dma_addr_t  dma;
+	size_t      size;
+};
+
+
 struct hws_pcie_dev {
 	/* ───── core objects ───── */
 	struct pci_dev			*pdev;
@@ -162,6 +169,7 @@ struct hws_pcie_dev {
 
 	/* ───── kernel thread ───── */
 	struct task_struct        *main_task;
+    struct hws_scratch_dma scratch_vid[MAX_VID_CHANNELS];
 
 	bool suspended;
 	int  irq;
