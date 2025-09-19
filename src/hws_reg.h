@@ -45,9 +45,6 @@
 #define MAX_VIDEO_SCALER_SIZE     (1920U * 1080U * 2U)
 
 
-#define  PCI_BARADDROFSIZE 4
-
-
 #define MIN_VAMP_BRIGHTNESS_UNITS   0
 #define MAX_VAMP_BRIGHTNESS_UNITS   0xff
 
@@ -67,12 +64,12 @@
 #define HWS_HUE_DEFAULT              0x00
 
 /* ── Core / global status ─────────────────────────────────────────────────── */
-#define HWS_REG_SYS_STATUS            (CVBS_IN_BASE +  0 * PCI_BARADDROFSIZE)
+#define HWS_REG_SYS_STATUS            (CVBS_IN_BASE +  0 * PCIE_BARADDROFSIZE)
 /* bit3: DMA busy, bit2: int, … */
 
 #define HWS_SYS_DMA_BUSY_BIT     BIT(3)   /* 0x08 = DMA busy flag */
 
-#define HWS_REG_DEC_MODE       (CVBS_IN_BASE +  0 * PCI_BARADDROFSIZE)
+#define HWS_REG_DEC_MODE       (CVBS_IN_BASE +  0 * PCIE_BARADDROFSIZE)
 /*  Write 0x00 to fully reset decoder,
  *  set bit 31=1 to “start run”,
  *  low byte=0x13 selects YUYV/BT.709/etc,
@@ -87,28 +84,25 @@
 #define HWS_HPD_BIT            BIT(0)      /* hot-plug detect */
 #define HWS_5V_BIT             BIT(3)      /* cable +5-volt */
 
-#define HWS_REG_INT_ENABLE     (CVBS_IN_BASE +  4 * PCI_BARADDROFSIZE)
-/* Write 0x3FFFF here to enable all video/audio interrupts. */
-
-#define HWS_REG_INT_STATUS            (CVBS_IN_BASE +  1 * PCI_BARADDROFSIZE) /* per-channel done flags       */
+#define HWS_REG_INT_STATUS            (CVBS_IN_BASE +  1 * PCIE_BARADDROFSIZE) /* per-channel done flags       */
 #define HWS_SYS_BUSY_BIT          BIT(2)      /* matches old 0x04 test   */
 
 /* ── Capture enable switches ──────────────────────────────────────────────── */
-#define HWS_REG_VCAP_ENABLE           (CVBS_IN_BASE +  2 * PCI_BARADDROFSIZE) /* bit0-3: CH0-CH3 video enable */
-#define HWS_REG_ACAP_ENABLE           (CVBS_IN_BASE +  3 * PCI_BARADDROFSIZE) /* bit0-3: CH0-CH3 audio enable */
-#define HWS_REG_ACTIVE_STATUS          (CVBS_IN_BASE +  5  * PCI_BARADDROFSIZE) /* bits0-3: signal present, bits8-11: interlace */
-#define HWS_REG_HDCP_STATUS            (CVBS_IN_BASE +  8  * PCI_BARADDROFSIZE) /* bits0-3: HDCP detected                       */
-#define HWS_REG_DMA_MAX_SIZE   (CVBS_IN_BASE +  9 * PCI_BARADDROFSIZE)
+#define HWS_REG_VCAP_ENABLE           (CVBS_IN_BASE +  2 * PCIE_BARADDROFSIZE) /* bit0-3: CH0-CH3 video enable */
+#define HWS_REG_ACAP_ENABLE           (CVBS_IN_BASE +  3 * PCIE_BARADDROFSIZE) /* bit0-3: CH0-CH3 audio enable */
+#define HWS_REG_ACTIVE_STATUS          (CVBS_IN_BASE +  5  * PCIE_BARADDROFSIZE) /* bits0-3: signal present, bits8-11: interlace */
+#define HWS_REG_HDCP_STATUS            (CVBS_IN_BASE +  8  * PCIE_BARADDROFSIZE) /* bits0-3: HDCP detected                       */
+#define HWS_REG_DMA_MAX_SIZE   (CVBS_IN_BASE +  9 * PCIE_BARADDROFSIZE)
 
 /* ── Buffer addresses (written once during init / reset) ─────────────────── */
-#define HWS_REG_VBUF1_ADDR            (CVBS_IN_BASE + 25 * PCI_BARADDROFSIZE) /* base of host-visible buffer  */
+#define HWS_REG_VBUF1_ADDR            (CVBS_IN_BASE + 25 * PCIE_BARADDROFSIZE) /* base of host-visible buffer  */
 
 /* ── Per-channel live buffer toggles (read-only) ──────────────────────────── */
-#define HWS_REG_VBUF_TOGGLE(ch)       (CVBS_IN_BASE + (32 + (ch)) * PCI_BARADDROFSIZE)
+#define HWS_REG_VBUF_TOGGLE(ch)       (CVBS_IN_BASE + (32 + (ch)) * PCIE_BARADDROFSIZE)
 /*      Returns 0 or 1 = which half of the video ring the DMA engine is
  *      currently filling for channel *ch* (0–3).                              */
 
-#define HWS_REG_ABUF_TOGGLE(ch)       (CVBS_IN_BASE + (40 + (ch)) * PCI_BARADDROFSIZE)
+#define HWS_REG_ABUF_TOGGLE(ch)       (CVBS_IN_BASE + (40 + (ch)) * PCIE_BARADDROFSIZE)
 /*      Returns 0 or 1 = which half of the audio ring the DMA engine is
  *      currently filling for channel *ch* (0–3).                              */
 
@@ -116,18 +110,18 @@
 #define HWS_INT_VDONE_BIT(ch)     BIT(ch)         /* 0x01,0x02,0x04,0x08  */
 #define HWS_INT_ADONE_BIT(ch)     BIT(8 + (ch))   /* 0x100 .. 0x800 */
 
-#define HWS_REG_INT_ACK           (CVBS_IN_BASE + 0x4000 + 1 * PCI_BARADDROFSIZE)
+#define HWS_REG_INT_ACK           (CVBS_IN_BASE + 0x4000 + 1 * PCIE_BARADDROFSIZE)
 
-#define HWS_REG_IN_RES(ch)             (CVBS_IN_BASE + (90  + (ch) * 2) * PCI_BARADDROFSIZE) /* 16-bit W | 16-bit H      */
-#define HWS_REG_BCHS(ch)               (CVBS_IN_BASE + (91  + (ch) * 2) * PCI_BARADDROFSIZE) /* B|C|H|S packed bytes     */
+#define HWS_REG_IN_RES(ch)             (CVBS_IN_BASE + (90  + (ch) * 2) * PCIE_BARADDROFSIZE) /* 16-bit W | 16-bit H      */
+#define HWS_REG_BCHS(ch)               (CVBS_IN_BASE + (91  + (ch) * 2) * PCIE_BARADDROFSIZE) /* B|C|H|S packed bytes     */
 
-#define HWS_REG_FRAME_RATE(ch)         (CVBS_IN_BASE + (110 + (ch))    * PCI_BARADDROFSIZE)  /* input fps                */
-#define HWS_REG_OUT_RES(ch)            (CVBS_IN_BASE + (120 + (ch))    * PCI_BARADDROFSIZE)  /* programmed out W|H       */
-#define HWS_REG_OUT_FRAME_RATE(ch)     (CVBS_IN_BASE + (130 + (ch))    * PCI_BARADDROFSIZE)  /* programmed out fps       */
+#define HWS_REG_FRAME_RATE(ch)         (CVBS_IN_BASE + (110 + (ch))    * PCIE_BARADDROFSIZE)  /* input fps                */
+#define HWS_REG_OUT_RES(ch)            (CVBS_IN_BASE + (120 + (ch))    * PCIE_BARADDROFSIZE)  /* programmed out W|H       */
+#define HWS_REG_OUT_FRAME_RATE(ch)     (CVBS_IN_BASE + (130 + (ch))    * PCIE_BARADDROFSIZE)  /* programmed out fps       */
 
 
 /* ── “device version / port ID / subversion” register ───────────────────── */
-#define HWS_REG_DEVICE_INFO   (CVBS_IN_BASE +  88 * PCI_BARADDROFSIZE)
+#define HWS_REG_DEVICE_INFO   (CVBS_IN_BASE +  88 * PCIE_BARADDROFSIZE)
 /*  Reading this 32-bit word returns:
  *    bits  7:0   = “device version”
  *    bits 15:8   = “device sub-version”

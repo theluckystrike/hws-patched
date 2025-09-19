@@ -43,6 +43,7 @@
 	  .driver_data = (unsigned long)(__configptr) }
 
 #define CH_SHIFT 2 /* need 2 bits for 0-3            */
+#define LOG_DEC(tag) dev_info(&hdev->pdev->dev, "DEC_MODE %s = 0x%08x\n", tag, readl(hdev->bar0_base + HWS_REG_DEC_MODE))
 
 static const struct pci_device_id hws_pci_table[] = {
 	MAKE_ENTRY(0x8888, 0x9534, 0x8888, 0x0007, NULL),
@@ -61,6 +62,117 @@ static const struct pci_device_id hws_pci_table[] = {
 
 	{}
 };
+
+
+static inline u32 hws_r32(void __iomem *base, u32 off)
+{
+	/* Single place to add barriers or tracing if needed */
+	return readl(base + off);
+}
+
+static void hws_dump_pipe_regs(struct hws_pcie_dev *hws, int ch)
+{
+	u32 hpd = hws_r32(hws->bar0_base, HWS_REG_HPD(ch));
+	u32 vtoggle = hws_r32(hws->bar0_base, HWS_REG_VBUF_TOGGLE(ch));
+	u32 atoggle = hws_r32(hws->bar0_base, HWS_REG_ABUF_TOGGLE(ch));
+	u32 in_res   = hws_r32(hws->bar0_base, HWS_REG_IN_RES(ch));
+	u32 bchs     = hws_r32(hws->bar0_base, HWS_REG_BCHS(ch));
+	u32 infps    = hws_r32(hws->bar0_base, HWS_REG_FRAME_RATE(ch));
+	u32 out_res  = hws_r32(hws->bar0_base, HWS_REG_OUT_RES(ch));
+	u32 outfps   = hws_r32(hws->bar0_base, HWS_REG_OUT_FRAME_RATE(ch));
+
+	u16 in_w  = (in_res >> 16) & 0xFFFF;
+	u16 in_h  = (in_res >>  0) & 0xFFFF;
+	u16 out_w = (out_res >> 16) & 0xFFFF;
+	u16 out_h = (out_res >>  0) & 0xFFFF;
+
+	pr_info("  [CH%u]\n", ch);
+	pr_info("    HPD=0x%08x (HPD=%d, +5V=%d)\n",
+		hpd, !!(hpd & HWS_HPD_BIT), !!(hpd & HWS_5V_BIT));
+	pr_info("    VBUF_TOGGLE=%u  ABUF_TOGGLE=%u\n", vtoggle & 1, atoggle & 1);
+	pr_info("    IN_RES=%ux%u  (raw=0x%08x)  IN_FPS=%u\n",
+		in_w, in_h, in_res, infps);
+	pr_info("    OUT_RES=%ux%u (raw=0x%08x)  OUT_FPS=%u\n",
+		out_w, out_h, out_res, outfps);
+	pr_info("    BCHS=0x%08x  [B=%u C=%u H=%u S=%u]\n",
+		bchs, (bchs >> 24) & 0xFF, (bchs >> 16) & 0xFF,
+		(bchs >> 8) & 0xFF, bchs & 0xFF);
+}
+
+static void hws_dump_all_regs(struct hws_pcie_dev *hws, const char *tag)
+{
+	u32 sys_status   = hws_r32(hws->bar0_base, HWS_REG_SYS_STATUS);
+	u32 dec_mode     = hws_r32(hws->bar0_base, HWS_REG_DEC_MODE);
+	u32 int_status   = hws_r32(hws->bar0_base, HWS_REG_INT_STATUS);
+	u32 int_en_gate  = hws_r32(hws->bar0_base, INT_EN_REG_BASE);
+	u32 int_route    = hws_r32(hws->bar0_base, PCIE_INT_DEC_REG_BASE);
+	u32 br_en        = hws_r32(hws->bar0_base, PCIEBR_EN_REG_BASE);
+
+	u32 v_en         = hws_r32(hws->bar0_base, HWS_REG_VCAP_ENABLE);
+	u32 a_en         = hws_r32(hws->bar0_base, HWS_REG_ACAP_ENABLE);
+	u32 active       = hws_r32(hws->bar0_base, HWS_REG_ACTIVE_STATUS);
+	u32 hdcp         = hws_r32(hws->bar0_base, HWS_REG_HDCP_STATUS);
+	u32 dma_max      = hws_r32(hws->bar0_base, HWS_REG_DMA_MAX_SIZE);
+	u32 vbuf1_addr   = hws_r32(hws->bar0_base, HWS_REG_VBUF1_ADDR);
+	u32 dev_info     = hws_r32(hws->bar0_base, HWS_REG_DEVICE_INFO);
+
+	u8  dev_ver      = (dev_info >>  0) & 0xFF;
+	u8  dev_subver   = (dev_info >>  8) & 0xFF;
+	u8  port_id      = (dev_info >> 16) & 0x1F;  /* as per comment: 23:24 etc. */
+	u8  yv12_flags   = (dev_info >> 28) & 0x0F;
+
+	pr_info("=============== HWS REG DUMP (%s) ===============\n", tag ? tag : "");
+	pr_info(" BAR0=%p\n", hws->bar0_base);
+
+	/* Core / global */
+	pr_info("-- CORE/GLOBAL --\n");
+	pr_info(" SYS_STATUS     = 0x%08x  [DMA_BUSY=%d]\n",
+		sys_status, !!(sys_status & HWS_SYS_DMA_BUSY_BIT));
+	pr_info(" DEC_MODE       = 0x%08x\n", dec_mode);
+
+	/* Interrupt fabric */
+	pr_info("-- INTERRUPTS --\n");
+	pr_info(" INT_STATUS     = 0x%08x\n", int_status);
+	pr_info(" INT_EN_GATE    = 0x%08x  (global/bridge gate)\n", int_en_gate);
+	pr_info(" INT_ROUTE      = 0x%08x  (router/decoder)\n", int_route);
+	pr_info(" BRIDGE_EN      = 0x%08x\n", br_en);
+
+	/* Capture on/off + activity */
+	pr_info("-- CAPTURE/STATUS --\n");
+	pr_info(" VCAP_ENABLE    = 0x%08x (bits0-3 CH0..CH3)\n", v_en);
+	pr_info(" ACAP_ENABLE    = 0x%08x (bits0-3 CH0..CH3)\n", a_en);
+	pr_info(" ACTIVE_STATUS  = 0x%08x (sig bits0-3 | interlace bits8-11)\n", active);
+	pr_info(" HDCP_STATUS    = 0x%08x\n", hdcp);
+
+	/* DMA / buffers */
+	pr_info("-- DMA/BUFFERS --\n");
+	pr_info(" DMA_MAX_SIZE   = 0x%08x\n", dma_max);
+	pr_info(" VBUF1_ADDR     = 0x%08x\n", vbuf1_addr);
+
+	/* Device info */
+	pr_info("-- DEVICE --\n");
+	pr_info(" DEVICE_INFO    = 0x%08x  (ver=%u subver=%u port=%u yv12=0x%x)\n",
+		dev_info, dev_ver, dev_subver, port_id, yv12_flags);
+
+	/* Per-channel block */
+	pr_info("-- PER-CHANNEL --\n");
+	for (int ch = 0; ch < MAX_VID_CHANNELS; ch++)
+		hws_dump_pipe_regs(hws, ch);
+
+	/* Helpful decoded view of INT_STATUS for ch0..3 (video+audio done bits) */
+	{
+		u32 st = int_status;
+		pr_info("-- INT_STATUS DECODE --\n");
+		for (int ch = 0; ch < MAX_VID_CHANNELS; ch++) {
+			bool vdone = !!(st & HWS_INT_VDONE_BIT(ch));
+			bool adone = !!(st & HWS_INT_ADONE_BIT(ch));
+			pr_info("  CH%u: VDONE=%d ADONE=%d\n", ch, vdone, adone);
+		}
+	}
+
+	pr_info("============== END HWS REG DUMP (%s) ==============\n", tag ? tag : "");
+}
+
 
 static void enable_pcie_relaxed_ordering(struct pci_dev *dev)
 {
@@ -143,8 +255,8 @@ static int read_chip_id(struct hws_pcie_dev *hdev)
 	hdev->start_run = false;
 	hdev->pci_lost = 0;
 
-	writel(0x00, hdev->bar0_base + HWS_REG_DEC_MODE);
-	writel(0x10, hdev->bar0_base + HWS_REG_DEC_MODE);
+	writel(0x00, hdev->bar0_base + HWS_REG_DEC_MODE);  LOG_DEC("after 0x00");
+	writel(0x10, hdev->bar0_base + HWS_REG_DEC_MODE); LOG_DEC("after 0x10");
 
 	hws_configure_hardware_capabilities(hdev);
 
@@ -207,48 +319,6 @@ static void hws_stop_kthread_action(void *data)
 
 	if (!IS_ERR_OR_NULL(t))
 		kthread_stop(t);
-}
-
-static void hws_dump_irq_regs(struct hws_pcie_dev *hws, const char *tag)
-{
-	u32 ien = 0, ist = 0, vcap = 0, dec = 0, sys = 0;
-	if (!hws || !hws->bar0_base)
-		return;
-	sys  = readl(hws->bar0_base + HWS_REG_SYS_STATUS);
-	dec  = readl(hws->bar0_base + HWS_REG_DEC_MODE);
-	ien  = readl(hws->bar0_base + INT_EN_REG_BASE);
-	ist  = readl(hws->bar0_base + HWS_REG_INT_STATUS);
-	vcap = readl(hws->bar0_base + HWS_REG_VCAP_ENABLE);
-	dev_info(&hws->pdev->dev,
-		 "[%s] SYS=0x%08x DEC=0x%08x INT_EN=0x%08x INT_STATUS=0x%08x VCAP_EN=0x%08x\n",
-		 tag ? tag : "dump", sys, dec, ien, ist, vcap);
-}
-
-static void hws_try_enable_irqs(struct hws_pcie_dev *hws, const char *where)
-{
-	u32 before, after;
-	if (!hws || !hws->bar0_base)
-		return;
-
-	/* If core not RUN/READY, kick the standard bring-up once. */
-	if (!(readl(hws->bar0_base + HWS_REG_SYS_STATUS) & BIT(0))) {
-		dev_info(&hws->pdev->dev, "[%s] SYS_STATUS not ready; init video core\n",
-			 where ? where : "irqen");
-		hws_init_video_sys(hws, true);
-	}
-
-	before = readl(hws->bar0_base + INT_EN_REG_BASE);
-	writel(0x003FFFFF, hws->bar0_base + INT_EN_REG_BASE);
-	/* flush posted write */
-	after  = readl(hws->bar0_base + INT_EN_REG_BASE);
-	dev_info(&hws->pdev->dev, "[%s] INT_EN before=0x%08x after=0x%08x\n",
-		 where ? where : "irqen", before, after);
-
-	if (after != 0x003FFFFF) {
-		dev_warn(&hws->pdev->dev,
-			 "[%s] WARNING: INT_EN didn’t latch (0x%08x). Register may be write-locked pre-RUN or offset is wrong.\n",
-			 where ? where : "irqen", after);
-	}
 }
 
 static int hws_alloc_seed_buffers(struct hws_pcie_dev *hws)
@@ -337,13 +407,33 @@ static void hws_seed_all_channels(struct hws_pcie_dev *hws)
 	}
 }
 
+static void hws_irq_mask_gate(struct hws_pcie_dev *hws)
+{
+    writel(0x00000000, hws->bar0_base + INT_EN_REG_BASE);
+    (void)readl(hws->bar0_base + INT_EN_REG_BASE);
+}
 
+static void hws_irq_unmask_gate(struct hws_pcie_dev *hws)
+{
+    writel(0x0003FFFF, hws->bar0_base + INT_EN_REG_BASE);
+    (void)readl(hws->bar0_base + INT_EN_REG_BASE);
+}
+
+static void hws_irq_clear_pending(struct hws_pcie_dev *hws)
+{
+    u32 st = readl(hws->bar0_base + HWS_REG_INT_STATUS);
+    if (st) {
+        writel(st, hws->bar0_base + HWS_REG_INT_STATUS); /* W1C */
+        (void)readl(hws->bar0_base + HWS_REG_INT_STATUS);
+    }
+}
 
 static int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 {
 	struct hws_pcie_dev *hws;
 	int i, ret, nvec, irq;
 	unsigned long irqf = 0;
+    u32 en_read = 0, st = 0;
 	bool has_msix_cap, has_msi_cap, using_msi;
 
 	/* devres-backed device object */
@@ -356,11 +446,10 @@ static int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 	hws->suspended = false;
 	pci_set_drvdata(pdev, hws);
 
-	/* 1) Enable device + bus mastering */
+	/* 1) Enable device + bus mastering (managed) */
 	ret = pcim_enable_device(pdev);
 	if (ret)
 		return dev_err_probe(&pdev->dev, ret, "pcim_enable_device\n");
-
 	pci_set_master(pdev);
 
 	/* 2) Map BAR0 (managed) */
@@ -373,7 +462,7 @@ static int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 	if (ret)
 		return dev_err_probe(&pdev->dev, ret, "No 32-bit DMA support\n");
 
-	/* 3) Optional PCIe tuning */
+	/* 3) Optional PCIe tuning (same as before) */
 	enable_pcie_relaxed_ordering(pdev);
 #ifdef CONFIG_ARCH_TI816X
 	pcie_set_readrq(pdev, 128);
@@ -382,8 +471,9 @@ static int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 	/* 4) Identify chip & capabilities */
 	read_chip_id(hws);
 	dev_info(&pdev->dev, "Device VID=0x%04x DID=0x%04x\n", pdev->vendor, pdev->device);
+    hws_init_video_sys(hws, false);
 
-	/* 5) Init channels */
+	/* 5) Init channels (video/audio state, locks, vb2, ctrls) */
 	for (i = 0; i < hws->max_channels; i++) {
 		ret = hws_video_init_channel(hws, i);
 		if (ret) {
@@ -397,63 +487,46 @@ static int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 		}
 	}
 
+	/* 6) Allocate scratch DMA and seed BAR table + channel base/half (legacy SetDMAAddress) */
 	ret = hws_alloc_seed_buffers(hws);
-	if (ret) {
-		dev_warn(&pdev->dev, "continuing without scratch seed buffers\n");
-		/* not fatal, but you won’t have seeded BARs until first QBUF */
-	} else {
+	if (!ret)
 		hws_seed_all_channels(hws);
+
+	/* 7) Start-run sequence (like InitVideoSys) */
+	hws_init_video_sys(hws, false);
+
+	/* A) Force legacy INTx; legacy used request_irq(pdev->irq, ..., IRQF_SHARED) */
+	pci_intx(pdev, 1);
+	irqf = IRQF_SHARED;
+	irq  = pdev->irq;
+	hws->irq = irq;
+	dev_info(&pdev->dev, "IRQ mode: legacy INTx (shared), irq=%d\n", irq);
+
+	/* B) Mask the device's global/bridge gate (INT_EN_REG_BASE) */
+	writel(0x00000000, hws->bar0_base + INT_EN_REG_BASE);
+	(void)readl(hws->bar0_base + INT_EN_REG_BASE);
+
+	/* C) Clear any sticky pending interrupt status (W1C) before we arm the line */
+	st = readl(hws->bar0_base + HWS_REG_INT_STATUS);
+	if (st) {
+		writel(st, hws->bar0_base + HWS_REG_INT_STATUS);
+		(void)readl(hws->bar0_base + HWS_REG_INT_STATUS);
 	}
 
-	/* 6) IRQ vectors (1 vector), with robust logging */
-	nvec = pci_alloc_irq_vectors(pdev, 1, 1, PCI_IRQ_ALL_TYPES | PCI_IRQ_AFFINITY);
-	if (nvec < 0) {
-		ret = nvec;
-		dev_err(&pdev->dev, "pci_alloc_irq_vectors: %d\n", ret);
-		goto err_unwind_channels;
-	}
-	ret = devm_add_action_or_reset(&pdev->dev, hws_free_irq_vectors_action, pdev);
-	if (ret) {
-		dev_err(&pdev->dev, "devm_add_action free_irq_vectors: %d\n", ret);
-		goto err_unwind_channels; /* reset already freed vectors */
-	}
-
-	has_msix_cap = !!pci_find_capability(pdev, PCI_CAP_ID_MSIX);
-	has_msi_cap  = !!pci_find_capability(pdev, PCI_CAP_ID_MSI);
-	using_msi    = pci_dev_msi_enabled(pdev); /* true if MSI (not MSI-X) is actually enabled */
-
-	dev_info(&pdev->dev,
-		 "irq vectors=%d (caps: msix=%d msi=%d) using=%s/INTx\n",
-		 nvec, has_msix_cap, has_msi_cap,
-		 using_msi ? "MSI" : (has_msix_cap ? "MSI-X (likely)" : "none"));
-
-	/* 7) Decide IRQ flags: use IRQF_SHARED only on legacy INTx */
-	if (!has_msix_cap && !has_msi_cap && !using_msi) {
-		pci_intx(pdev, 1);
-		irqf = IRQF_SHARED;
-		dev_info(&pdev->dev, "IRQ mode: legacy INTx (shared)\n");
-	} else {
-		irqf = 0; /* MSI / MSI-X are not shared */
-		dev_info(&pdev->dev, "IRQ mode: %s\n", using_msi ? "MSI" : "MSI-X");
-	}
-
-    hws_init_video_sys(hws, false);
-
-	irq = pci_irq_vector(pdev, 0);
-	dev_info(&pdev->dev, "requesting irq=%d irqf=0x%lx\n", irq, irqf);
-
-	ret = devm_request_irq(&pdev->dev, irq, hws_irq_handler, irqf, dev_name(&pdev->dev), hws);
+	/* D) Request the legacy shared interrupt line (no vectors/MSI/MSI-X) */
+	ret = devm_request_irq(&pdev->dev, irq, hws_irq_handler, irqf,
+	                       dev_name(&pdev->dev), hws);
 	if (ret) {
 		dev_err(&pdev->dev, "request_irq(%d) failed: %d\n", irq, ret);
 		goto err_unwind_channels;
 	}
-	hws->irq = irq;
 
-	/* 8) Dump, bring up core if needed, try to enable device IRQs, dump again */
-	hws_dump_irq_regs(hws, "post-request_irq");
-	hws_try_enable_irqs(hws, "probe");
-	hws_dump_irq_regs(hws, "after-enable-irqs");
-	/* 9) Register V4L2/ALSA */
+	/* E) Open the global gate just like legacy did: INT_EN_REG_BASE = 0x3ffff */
+	writel(0x0003ffff, hws->bar0_base + INT_EN_REG_BASE);
+	dev_info(&pdev->dev, "INT_EN_GATE readback=0x%08x\n",
+	         readl(hws->bar0_base + INT_EN_REG_BASE));
+
+	/* 11) Register V4L2/ALSA */
 	ret = hws_video_register(hws);
 	if (ret) {
 		dev_err(&pdev->dev, "video_register: %d\n", ret);
@@ -466,7 +539,7 @@ static int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 		goto err_unwind_channels;
 	}
 
-	/* 10) Background monitor thread (managed) */
+	/* 12) Background monitor thread (managed) */
 	hws->main_task = kthread_run(main_ks_thread_handle, hws, "hws-mon");
 	if (IS_ERR(hws->main_task)) {
 		ret = PTR_ERR(hws->main_task);
@@ -480,24 +553,18 @@ static int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 		goto err_unregister_va; /* reset already stopped the thread */
 	}
 
-	/* 11) Final: show the line is armed */
+	/* 13) Final: show the line is armed */
 	dev_info(&pdev->dev, "irq handler installed on irq=%d\n", irq);
-
-	/* Optional: if your HW requires enabling global IRQs, do it here.
-	 * Example (uncomment if appropriate for your device):
-	 *   writel(0x3FFFFF, hws->bar0_base + INT_EN_REG_BASE);
-	 *   dev_info(&pdev->dev, "INT_EN set to 0x%08x\n",
-	 *            readl(hws->bar0_base + INT_EN_REG_BASE));
-	 */
-
+    hws_dump_all_regs(hws, "probe:end");
 	return 0;
 
 err_unregister_va:
 	hws_stop_device(hws);
 	hws_audio_unregister(hws);
 	hws_video_unregister(hws);
-err_unwind_channels:
     hws_free_seed_buffers(hws);
+err_unwind_channels:
+	hws_free_seed_buffers(hws);
 	while (--i >= 0) {
 		hws_video_cleanup_channel(hws, i);
 		hws_audio_cleanup_channel(hws, i, true);

@@ -29,6 +29,9 @@
 #include <sound/initval.h>
 
 #define HWS_MAX_BUFS 32
+#define HWS_REMAP_SLOT_OFF(ch)   (0x208 + (ch) * 8)     /* one 64-bit slot per ch */
+#define HWS_BUF_BASE_OFF(ch)     (CVBS_IN_BUF_BASE  + (ch) * PCIE_BARADDROFSIZE)
+#define HWS_HALF_SZ_OFF(ch)      (CVBS_IN_BUF_BASE2 + (ch) * PCIE_BARADDROFSIZE)
 
 static void update_live_resolution(struct hws_pcie_dev *pdx, unsigned int ch);
 static bool hws_update_active_interlace(struct hws_pcie_dev *pdx,
@@ -255,36 +258,42 @@ static void hws_buf_cleanup(struct vb2_buffer *vb)
 
 
 void hws_program_video_from_vb2(struct hws_pcie_dev *hws, unsigned int ch,
-				struct vb2_buffer *vb)
+                                struct vb2_buffer *vb)
 {
-	const u32 addr_mask = PCI_E_BAR_ADD_MASK;
-	const u32 addr_low_mask = PCI_E_BAR_ADD_LOWMASK;
-	const u32 table_off = 0x208 + ch * 8; /* one 64-bit slot per ch */
+    const u32 addr_mask     = PCI_E_BAR_ADD_MASK;     // 0xE0000000
+    const u32 addr_low_mask = PCI_E_BAR_ADD_LOWMASK;  // 0x1FFFFFFF
+    const u32 table_off     = 0x208 + ch * 8;         // same as legacy
 
-	dma_addr_t paddr = vb2_dma_contig_plane_dma_addr(vb, 0);
-	u32 lo = lower_32_bits(paddr);
-	u32 hi = upper_32_bits(paddr);
-	u32 pci_addr = lo & addr_low_mask;
+    dma_addr_t paddr = vb2_dma_contig_plane_dma_addr(vb, 0);
+    u32 lo = lower_32_bits(paddr);
+    u32 hi = upper_32_bits(paddr);
+    u32 pci_addr = lo & addr_low_mask;   // low 29 bits inside 512MB window
+    u32 page_lo  = lo & addr_mask;       // bits 31..29 only (page bits)
 
-	lo &= addr_mask;
+    /* Remap entry: HI then page_LO (legacy order) */
+    writel(hi, hws->bar0_base + PCI_ADDR_TABLE_BASE + table_off + 0);
+    (void)readl(hws->bar0_base + PCI_ADDR_TABLE_BASE + table_off + 0);
+    writel(page_lo, hws->bar0_base + PCI_ADDR_TABLE_BASE + table_off + PCIE_BARADDROFSIZE);
+    (void)readl(hws->bar0_base + PCI_ADDR_TABLE_BASE + table_off + PCIE_BARADDROFSIZE);
 
-	/* Program 64-bit BAR remap entry for this channel */
-	writel_relaxed(hi, hws->bar0_base + PCI_ADDR_TABLE_BASE + table_off);
-	writel_relaxed(lo, hws->bar0_base + PCI_ADDR_TABLE_BASE + table_off +
-				   PCIE_BARADDROFSIZE);
+    /* Program per-channel base and half-size */
+    writel((ch + 1) * PCIEBAR_AXI_BASE + pci_addr,
+           hws->bar0_base + CVBS_IN_BUF_BASE + ch * PCIE_BARADDROFSIZE);
+    (void)readl(hws->bar0_base + CVBS_IN_BUF_BASE + ch * PCIE_BARADDROFSIZE);
 
-	/* Program capture engine per-channel base/size */
-	writel_relaxed((ch + 1) * PCIEBAR_AXI_BASE + pci_addr,
-		       hws->bar0_base + CVBS_IN_BUF_BASE +
-			       ch * PCIE_BARADDROFSIZE);
+    writel(hws->video[ch].pix.half_size / 16,
+           hws->bar0_base + CVBS_IN_BUF_BASE2 + ch * PCIE_BARADDROFSIZE);
+    (void)readl(hws->bar0_base + CVBS_IN_BUF_BASE2 + ch * PCIE_BARADDROFSIZE);
 
-	/* If HW uses half-buffer toggling, program half_size (device-specific) */
-	writel_relaxed(hws->video[ch].pix.half_size / 16,
-		       hws->bar0_base + CVBS_IN_BUF_BASE2 +
-			       ch * PCIE_BARADDROFSIZE);
-
-	/* Ensure above posted writes reach the device before capture starts */
-	readl(hws->bar0_base + HWS_REG_INT_STATUS);
+    /* Optional: verify and log */
+    {
+        u32 r_hi  = readl(hws->bar0_base + PCI_ADDR_TABLE_BASE + table_off + 0);
+        u32 r_lo  = readl(hws->bar0_base + PCI_ADDR_TABLE_BASE + table_off + PCIE_BARADDROFSIZE);
+        u32 r_base= readl(hws->bar0_base + CVBS_IN_BUF_BASE  + ch * PCIE_BARADDROFSIZE);
+        u32 r_half= readl(hws->bar0_base + CVBS_IN_BUF_BASE2 + ch * PCIE_BARADDROFSIZE);
+        pr_info("ch%u remap: hi=0x%08x(lo exp 0x%08x got 0x%08x) base=0x%08x exp=0x%08x half16B=0x%08x\n",
+                ch, r_hi, page_lo, r_lo, r_base, (ch+1)*PCIEBAR_AXI_BASE + pci_addr, r_half);
+    }
 }
 
 static inline u32 hws_read_port_hpd(struct hws_pcie_dev *hws, unsigned int port)
@@ -416,6 +425,31 @@ static void hws_seed_dma_windows(struct hws_pcie_dev *hws)
     (void)readl(hws->bar0_base + HWS_REG_INT_STATUS);
 }
 
+#define LOG_DEC(tag) dev_info(&hws->pdev->dev, "DEC_MODE %s = 0x%08x\n", tag, readl(hws->bar0_base + HWS_REG_DEC_MODE))
+
+static void hws_ack_all_irqs(struct hws_pcie_dev *hws)
+{
+    u32 st = readl(hws->bar0_base + HWS_REG_INT_STATUS);
+    if (st) {
+        writel(st, hws->bar0_base + HWS_REG_INT_STATUS); /* W1C */
+        (void)readl(hws->bar0_base + HWS_REG_INT_STATUS);
+    }
+}
+
+static void hws_open_irq_fabric(struct hws_pcie_dev *hws)
+{
+    /* Route all sources to vector 0 (same value you’re already using) */
+    writel(0x00000000, hws->bar0_base + PCIE_INT_DEC_REG_BASE);
+    (void)readl(hws->bar0_base + PCIE_INT_DEC_REG_BASE);
+
+    /* Turn on the bridge if your IP needs it */
+    writel(0x00000001, hws->bar0_base + PCIEBR_EN_REG_BASE);
+    (void)readl(hws->bar0_base + PCIEBR_EN_REG_BASE);
+
+    /* Open the global/bridge gate (legacy 0x3FFFF) */
+    writel(0x0003FFFF, hws->bar0_base + INT_EN_REG_BASE);
+    (void)readl(hws->bar0_base + INT_EN_REG_BASE);
+}
 
 void hws_init_video_sys(struct hws_pcie_dev *hws, bool enable)
 {
@@ -425,7 +459,8 @@ void hws_init_video_sys(struct hws_pcie_dev *hws, bool enable)
 		return;
 
 	/* 1) reset the decoder mode register to 0 */
-	writel(0x00000000, hws->bar0_base + HWS_REG_DEC_MODE);
+    writel(0x00000000, hws->bar0_base + HWS_REG_DEC_MODE); LOG_DEC("after reset");
+    hws_seed_dma_windows(hws);
 
 	/* 3) on a full reset, clear all per-channel status and indices */
 	if (!enable) {
@@ -436,17 +471,17 @@ void hws_init_video_sys(struct hws_pcie_dev *hws, bool enable)
 		}
 	}
 
-    hws_seed_dma_windows(hws);
 
 	/* 4) enable all interrupts */
-	writel(0x0003FFFF, hws->bar0_base + INT_EN_REG_BASE);
+	writel(0x3ffff, hws->bar0_base + INT_EN_REG_BASE); LOG_DEC("after runbit");
 
 	/* 5) “Start run”: set bit31, wait a bit, then program low 24 bits */
-	writel(0x80000000, hws->bar0_base + HWS_REG_DEC_MODE);
+	writel(0x80000000, hws->bar0_base + HWS_REG_DEC_MODE); LOG_DEC("start run");
 	// udelay(500);
-	writel(0x80FFFFFF, hws->bar0_base + HWS_REG_DEC_MODE);
-	writel(0x00000013, hws->bar0_base + HWS_REG_DEC_MODE);
-
+	writel(0x80FFFFFF, hws->bar0_base + HWS_REG_DEC_MODE); LOG_DEC("after mask");
+	writel(0x13, hws->bar0_base + HWS_REG_DEC_MODE); LOG_DEC("final");
+    hws_ack_all_irqs(hws);
+    hws_open_irq_fabric(hws);
 	/* 6) record that we're now running */
 	hws->start_run = true;
 }
@@ -959,6 +994,127 @@ static void hws_buffer_queue(struct vb2_buffer *vb)
 	spin_unlock_irqrestore(&vid->irq_lock, flags);
 }
 
+static inline u32 hws_r32(void __iomem *base, u32 off)
+{
+	/* Single place to add barriers or tracing if needed */
+	return readl(base + off);
+}
+
+static void hws_dump_pipe_regs(struct hws_pcie_dev *hws, int ch)
+{
+	u32 hpd      = hws_r32(hws->bar0_base, HWS_REG_HPD(ch));
+	u32 vtoggle  = hws_r32(hws->bar0_base, HWS_REG_VBUF_TOGGLE(ch));
+	u32 atoggle  = hws_r32(hws->bar0_base, HWS_REG_ABUF_TOGGLE(ch));
+	u32 in_res   = hws_r32(hws->bar0_base, HWS_REG_IN_RES(ch));
+	u32 bchs     = hws_r32(hws->bar0_base, HWS_REG_BCHS(ch));
+	u32 infps    = hws_r32(hws->bar0_base, HWS_REG_FRAME_RATE(ch));
+	u32 out_res  = hws_r32(hws->bar0_base, HWS_REG_OUT_RES(ch));
+	u32 outfps   = hws_r32(hws->bar0_base, HWS_REG_OUT_FRAME_RATE(ch));
+
+	/* NEW: per-channel buffer base & half-size */
+	u32 buf_base = hws_r32(hws->bar0_base, HWS_BUF_BASE_OFF(ch));
+	u32 half_sz  = hws_r32(hws->bar0_base, HWS_HALF_SZ_OFF(ch)); /* units of 16 bytes per your program path */
+
+	/* NEW: remap slot (legacy order: HI at +0, page-LO at +4) */
+	u32 remap_hi = hws_r32(hws->bar0_base, PCI_ADDR_TABLE_BASE + HWS_REMAP_SLOT_OFF(ch) + 0);
+	u32 remap_lo = hws_r32(hws->bar0_base, PCI_ADDR_TABLE_BASE + HWS_REMAP_SLOT_OFF(ch) + PCIE_BARADDROFSIZE);
+
+	u16 in_w  = (in_res  >> 16) & 0xFFFF;
+	u16 in_h  = (in_res  >>  0) & 0xFFFF;
+	u16 out_w = (out_res >> 16) & 0xFFFF;
+	u16 out_h = (out_res >>  0) & 0xFFFF;
+
+	pr_info("  [CH%u]\n", ch);
+	pr_info("    HPD=0x%08x (HPD=%d, +5V=%d)\n",
+		hpd, !!(hpd & HWS_HPD_BIT), !!(hpd & HWS_5V_BIT));
+	pr_info("    VBUF_TOGGLE=%u  ABUF_TOGGLE=%u\n", vtoggle & 1, atoggle & 1);
+	pr_info("    IN_RES=%ux%u  (raw=0x%08x)  IN_FPS=%u\n",
+		in_w, in_h, in_res, infps);
+	pr_info("    OUT_RES=%ux%u (raw=0x%08x)  OUT_FPS=%u\n",
+		out_w, out_h, out_res, outfps);
+	pr_info("    BCHS=0x%08x  [B=%u C=%u H=%u S=%u]\n",
+		bchs, (bchs >> 24) & 0xFF, (bchs >> 16) & 0xFF,
+		(bchs >> 8) & 0xFF, bchs & 0xFF);
+
+	/* NEW: buffer programming visibility */
+	pr_info("    BUF_BASE=0x%08x  HALF_SZ(16B)=0x%08x\n", buf_base, half_sz);
+	pr_info("    REMAP_SLOT: HI=0x%08x  page-LO=0x%08x\n", remap_hi, remap_lo);
+}
+
+void hws_video_dump_all_regs(struct hws_pcie_dev *hws, const char *tag)
+{
+	u32 sys_status   = hws_r32(hws->bar0_base, HWS_REG_SYS_STATUS);
+	u32 dec_mode     = hws_r32(hws->bar0_base, HWS_REG_DEC_MODE);
+	u32 int_status   = hws_r32(hws->bar0_base, HWS_REG_INT_STATUS);
+	u32 int_en_gate  = hws_r32(hws->bar0_base, INT_EN_REG_BASE);
+	u32 int_route    = hws_r32(hws->bar0_base, PCIE_INT_DEC_REG_BASE);
+	u32 br_en        = hws_r32(hws->bar0_base, PCIEBR_EN_REG_BASE);
+
+	u32 v_en         = hws_r32(hws->bar0_base, HWS_REG_VCAP_ENABLE);
+	u32 a_en         = hws_r32(hws->bar0_base, HWS_REG_ACAP_ENABLE);
+	u32 active       = hws_r32(hws->bar0_base, HWS_REG_ACTIVE_STATUS);
+	u32 hdcp         = hws_r32(hws->bar0_base, HWS_REG_HDCP_STATUS);
+	u32 dma_max      = hws_r32(hws->bar0_base, HWS_REG_DMA_MAX_SIZE);
+	/* NOTE: VBUF1_ADDR kept for reference; real per-channel bases printed above */
+	u32 vbuf1_addr   = hws_r32(hws->bar0_base, HWS_REG_VBUF1_ADDR);
+	u32 dev_info     = hws_r32(hws->bar0_base, HWS_REG_DEVICE_INFO);
+
+	u8  dev_ver    = (dev_info >>  0) & 0xFF;
+	u8  dev_subver = (dev_info >>  8) & 0xFF;
+	u8  port_id    = (dev_info >> 16) & 0x1F;
+	u8  yv12_flags = (dev_info >> 28) & 0x0F;
+
+	pr_info("=============== HWS REG DUMP (%s) ===============\n", tag ? tag : "");
+	pr_info(" BAR0=%p\n", hws->bar0_base);
+
+	/* Core / global */
+	pr_info("-- CORE/GLOBAL --\n");
+	pr_info(" SYS_STATUS     = 0x%08x  [DMA_BUSY=%d]\n",
+		sys_status, !!(sys_status & HWS_SYS_DMA_BUSY_BIT));
+	pr_info(" DEC_MODE       = 0x%08x\n", dec_mode);
+
+	/* Interrupt fabric */
+	pr_info("-- INTERRUPTS --\n");
+	pr_info(" INT_STATUS     = 0x%08x\n", int_status);
+	pr_info(" INT_EN_GATE    = 0x%08x  (global/bridge gate)\n", int_en_gate);
+	pr_info(" INT_ROUTE      = 0x%08x  (router/decoder)\n", int_route);
+	pr_info(" BRIDGE_EN      = 0x%08x\n", br_en);
+
+	/* Capture on/off + activity */
+	pr_info("-- CAPTURE/STATUS --\n");
+	pr_info(" VCAP_ENABLE    = 0x%08x (bits0-3 CH0..CH3)\n", v_en);
+	pr_info(" ACAP_ENABLE    = 0x%08x (bits0-3 CH0..CH3)\n", a_en);
+	pr_info(" ACTIVE_STATUS  = 0x%08x (sig bits0-3 | interlace bits8-11)\n", active);
+	pr_info(" HDCP_STATUS    = 0x%08x\n", hdcp);
+
+	/* DMA / buffers */
+	pr_info("-- DMA/BUFFERS --\n");
+	pr_info(" DMA_MAX_SIZE   = 0x%08x\n", dma_max);
+	pr_info(" VBUF1_ADDR     = 0x%08x  (legacy/global; per-channel bases below)\n", vbuf1_addr);
+
+	/* Device info */
+	pr_info("-- DEVICE --\n");
+	pr_info(" DEVICE_INFO    = 0x%08x  (ver=%u subver=%u port=%u yv12=0x%x)\n",
+		dev_info, dev_ver, dev_subver, port_id, yv12_flags);
+
+	/* Per-channel block (now includes buffer & remap info) */
+	pr_info("-- PER-CHANNEL --\n");
+	for (int ch = 0; ch < MAX_VID_CHANNELS; ch++)
+		hws_dump_pipe_regs(hws, ch);
+
+	/* Decoded INT_STATUS */
+	pr_info("-- INT_STATUS DECODE --\n");
+	for (int ch = 0; ch < MAX_VID_CHANNELS; ch++) {
+		bool vdone = !!(int_status & HWS_INT_VDONE_BIT(ch));
+		bool adone = !!(int_status & HWS_INT_ADONE_BIT(ch));
+		pr_info("  CH%u: VDONE=%d ADONE=%d\n", ch, vdone, adone);
+	}
+
+	pr_info("============== END HWS REG DUMP (%s) ==============\n", tag ? tag : "");
+}
+
+
+
 static int hws_start_streaming(struct vb2_queue *q, unsigned int count)
 {
     struct hws_video *v = q->drv_priv;
@@ -966,8 +1122,10 @@ static int hws_start_streaming(struct vb2_queue *q, unsigned int count)
     struct hwsvideo_buffer *to_program = NULL;   // local copy
     unsigned long flags;
     int en, ret;
-    pr_debug("start_streaming(ch=%u): entry, count=%u\n", v->channel_index, count);
+    pr_info("start_streaming(ch=%u): entry, count=%u\n", v->channel_index, count);
     hws_dump_irq_regs(hws, "start_streaming:before");
+    hws_video_dump_all_regs(hws, "start streaming:before");
+    // FIXME: half way buffer is broken, when we're writing the half way buffer size, it's not checking the buffer size currently
 
     ret = hws_check_card_status(hws);
     if (ret)
@@ -981,7 +1139,7 @@ static int hws_start_streaming(struct vb2_queue *q, unsigned int count)
     WRITE_ONCE(v->cap_active, true);
     WRITE_ONCE(v->half_seen, false);
     WRITE_ONCE(v->last_buf_half_toggle, 0);
-    pr_debug("start_streaming(ch=%u): state init stop=%d cap=%d\n",
+    pr_info("start_streaming(ch=%u): state init stop=%d cap=%d\n",
              v->channel_index, v->stop_requested, v->cap_active);
     mutex_unlock(&v->state_lock);
 
@@ -992,7 +1150,7 @@ static int hws_start_streaming(struct vb2_queue *q, unsigned int count)
                                       struct hwsvideo_buffer, list);
         list_del(&to_program->list);
         v->active = to_program;
-        pr_debug("start_streaming(ch=%u): took first queued buffer %p\n",
+        pr_info("start_streaming(ch=%u): took first queued buffer %p\n",
                  v->channel_index, to_program);
     }
     spin_unlock_irqrestore(&v->irq_lock, flags);
@@ -1002,7 +1160,8 @@ static int hws_start_streaming(struct vb2_queue *q, unsigned int count)
         wmb();
         hws_program_video_from_vb2(hws, v->channel_index,
                                    &to_program->vb.vb2_buf);
-        pr_debug("start_streaming(ch=%u): programmed first buffer %p\n",
+
+        pr_info("start_streaming(ch=%u): programmed first buffer %p\n",
                  v->channel_index, to_program);
         (void)readl(hws->bar0_base + HWS_REG_INT_STATUS); /* flush posted writes */
 
@@ -1013,14 +1172,15 @@ static int hws_start_streaming(struct vb2_queue *q, unsigned int count)
 
         if (en == 0) {
             hws_enable_video_capture(hws, v->channel_index, true);
-            pr_debug("start_streaming(ch=%u): capture %s\n",
+            pr_info("start_streaming(ch=%u): capture %s\n",
                      v->channel_index, en ? "already enabled" : "enabled now");
         } else {
-            pr_debug("start_streaming(ch=%u): no buffer to program yet (will arm on QBUF)\n",
+            pr_info("start_streaming(ch=%u): no buffer to program yet (will arm on QBUF)\n",
                      v->channel_index);
          }
     }
     hws_dump_irq_regs(hws, "start_streaming:exit");
+    hws_video_dump_all_regs(hws, "start streaming:exit");
 
     return 0;
 }
