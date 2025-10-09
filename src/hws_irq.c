@@ -58,6 +58,17 @@ static int hws_arm_next(struct hws_pcie_dev *hws, u32 ch)
     }
 
     hws_program_video_from_vb2(hws, ch, &buf->vb.vb2_buf);
+    
+    /* Also program the DMA address register directly */
+    {
+        dma_addr_t dma_addr = vb2_dma_contig_plane_dma_addr(&buf->vb.vb2_buf, 0);
+        iowrite32(lower_32_bits(dma_addr), hws->bar0_base + HWS_REG_DMA_ADDR(ch));
+        /* Ensure DMA is ready for device access */
+        dma_sync_single_for_device(&hws->pdev->dev, dma_addr, 
+                                  vb2_plane_size(&buf->vb.vb2_buf, 0), 
+                                  DMA_FROM_DEVICE);
+    }
+    
     pr_info("arm_next(ch=%u): programmed buffer %p\n", ch, buf);
     return 0;
 }
@@ -85,6 +96,10 @@ void hws_bh_video(struct tasklet_struct *t)
     if (done) {
         struct vb2_v4l2_buffer *vb2v = &done->vb;
 
+        /* Cancel timeout timer since we got the frame */
+        del_timer(&v->dma_timeout_timer);
+        v->last_frame_jiffies = jiffies;
+
         dma_rmb(); /* device writes visible before userspace sees it */
 
         vb2v->sequence = ++v->sequence_number;          /* BH-only increment */
@@ -106,6 +121,12 @@ void hws_bh_video(struct tasklet_struct *t)
         pr_info("bh_video(ch=%u): no queued buffer to arm\n", ch);
         return;
     }
+    
+    /* Start timeout timer for the newly armed buffer */
+    if (ret == 0 && v->active) {
+        mod_timer(&v->dma_timeout_timer, jiffies + msecs_to_jiffies(2000)); /* 2 second timeout */
+    }
+    
     pr_info("bh_video(ch=%u): armed next buffer, active=%p\n", ch, v->active);
     /* On success the engine now points at v->active’s DMA address */
 }

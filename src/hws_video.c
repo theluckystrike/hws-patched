@@ -41,6 +41,30 @@ static void handle_legacy_path(struct hws_pcie_dev *hws, unsigned int ch);
 static u32 hws_calc_sizeimage(struct hws_video *v, u16 w, u16 h,
 			      bool interlaced);
 
+/* DMA timeout handler */
+static void hws_dma_timeout_handler(struct timer_list *t)
+{
+	struct hws_video *vid = from_timer(vid, t, dma_timeout_timer);
+	struct hws_pcie_dev *hws = vid->parent;
+	unsigned long flags;
+	
+	dev_warn(&hws->pdev->dev, "DMA timeout on channel %d, active buffer: %p\n",
+	         vid->channel_index, vid->active);
+	
+	vid->timeout_count++;
+	
+	/* Reset the channel and complete current buffer with error */
+	spin_lock_irqsave(&vid->irq_lock, flags);
+	if (vid->active) {
+		vb2_buffer_done(&vid->active->vb.vb2_buf, VB2_BUF_STATE_ERROR);
+		vid->active = NULL;
+	}
+	spin_unlock_irqrestore(&vid->irq_lock, flags);
+	
+	/* Try to restart capture if we have queued buffers */
+	tasklet_schedule(&vid->bh_tasklet);
+}
+
 static int hws_ctrls_init(struct hws_video *vid)
 {
 	struct v4l2_ctrl_handler *hdl = &vid->control_handler;
@@ -124,6 +148,12 @@ int hws_video_init_channel(struct hws_pcie_dev *pdev, int ch)
 
 	/* typed tasklet: bind handler once */
 	tasklet_setup(&vid->bh_tasklet, hws_bh_video);
+
+	/* DMA timeout timer setup */
+	timer_setup(&vid->dma_timeout_timer, hws_dma_timeout_handler, 0);
+	vid->last_frame_jiffies = jiffies;
+	vid->timeout_count = 0;
+	vid->error_count = 0;
 
 	/* default format (adjust to your HW) */
 	vid->pix.width = 1920;
@@ -247,6 +277,18 @@ static int hws_buf_init(struct vb2_buffer *vb)
     struct hwsvideo_buffer *b = to_hwsbuf(vb);
     INIT_LIST_HEAD(&b->list);
     return 0;
+}
+
+static void hws_buf_finish(struct vb2_buffer *vb)
+{
+    struct hws_video *vid = vb->vb2_queue->drv_priv;
+    struct hws_pcie_dev *hws = vid->parent;
+    
+    /* Ensure DMA is complete and visible to CPU */
+    dma_sync_single_for_cpu(&hws->pdev->dev, 
+                           vb2_dma_contig_plane_dma_addr(vb, 0),
+                           vb2_plane_size(vb, 0), 
+                           DMA_FROM_DEVICE);
 }
 
 static void hws_buf_cleanup(struct vb2_buffer *vb)
@@ -957,10 +999,27 @@ static int hws_queue_setup(struct vb2_queue *q, unsigned int *num_buffers,
 static int hws_buffer_prepare(struct vb2_buffer *vb)
 {
 	struct hws_video *vid = vb->vb2_queue->drv_priv;
+	struct hws_pcie_dev *hws = vid->parent;
 	size_t need = vid->pix.sizeimage;
+	dma_addr_t dma_addr;
 
 	if (vb2_plane_size(vb, 0) < need)
 		return -EINVAL;
+
+	/* Validate DMA address alignment */
+	dma_addr = vb2_dma_contig_plane_dma_addr(vb, 0);
+	if (dma_addr & 0x3F) { /* 64-byte alignment required */
+		dev_err(&hws->pdev->dev, "Buffer DMA address 0x%llx not 64-byte aligned\n", 
+		        (unsigned long long)dma_addr);
+		return -EINVAL;
+	}
+
+	/* Check if buffer is in valid DMA range */
+	if (dma_addr + need > DMA_BIT_MASK(32)) {
+		dev_err(&hws->pdev->dev, "Buffer DMA address 0x%llx exceeds 32-bit range\n",
+		        (unsigned long long)dma_addr);
+		return -EINVAL;
+	}
 
 	vb2_set_plane_payload(vb, 0, need);
 	return 0;
@@ -1109,6 +1168,18 @@ void hws_video_dump_all_regs(struct hws_pcie_dev *hws, const char *tag)
 	for (int ch = 0; ch < MAX_VID_CHANNELS; ch++)
 		hws_dump_pipe_regs(hws, ch);
 
+	/* Per-channel diagnostics */
+	pr_info("-- CHANNEL DIAGNOSTICS --\n");
+	for (int ch = 0; ch < hws->cur_max_video_ch; ch++) {
+		struct hws_video *v = &hws->video[ch];
+		u32 dma_addr_reg = hws_r32(hws->bar0_base, HWS_REG_DMA_ADDR(ch));
+		pr_info("  CH%u: cap_active=%d stop_req=%d active=%p seq=%u timeout_cnt=%u err_cnt=%u\n",
+		        ch, v->cap_active, v->stop_requested, v->active, 
+		        v->sequence_number, v->timeout_count, v->error_count);
+		pr_info("       DMA_ADDR_REG=0x%08x queue_len=%d\n", 
+		        dma_addr_reg, !list_empty(&v->capture_queue));
+	}
+
 	/* Decoded INT_STATUS */
 	pr_info("-- INT_STATUS DECODE --\n");
 	for (int ch = 0; ch < MAX_VID_CHANNELS; ch++) {
@@ -1187,6 +1258,8 @@ static int hws_start_streaming(struct vb2_queue *q, unsigned int count)
         /* Only start hardware streaming after DMA address is programmed */
         if (en == 0) {
             hws_enable_video_capture(hws, v->channel_index, true);
+            /* Start timeout timer for first buffer */
+            mod_timer(&v->dma_timeout_timer, jiffies + msecs_to_jiffies(2000));
             pr_info("start_streaming(ch=%u): capture enabled after DMA programming\n",
                      v->channel_index);
         }
@@ -1217,6 +1290,9 @@ static void hws_stop_streaming(struct vb2_queue *q)
     WRITE_ONCE(v->cap_active, false);
     WRITE_ONCE(v->stop_requested, true);
     mutex_unlock(&v->state_lock);
+
+    /* Cancel any pending timeout */
+    del_timer_sync(&v->dma_timeout_timer);
 
     hws_enable_video_capture(v->parent, v->channel_index, false);
 
@@ -1263,6 +1339,7 @@ static const struct vb2_ops hwspcie_video_qops = {
 	.queue_setup = hws_queue_setup,
 	.buf_prepare = hws_buffer_prepare,
     .buf_init        = hws_buf_init,
+    .buf_finish      = hws_buf_finish,
     .buf_cleanup     = hws_buf_cleanup,
 	// .buf_finish = hws_buffer_finish,
 	.buf_queue = hws_buffer_queue,
