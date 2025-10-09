@@ -521,7 +521,16 @@ static int hws_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 		goto err_unwind_channels;
 	}
 
-	/* E) Open the global gate just like legacy did: INT_EN_REG_BASE = 0x3ffff */
+	/* E) Set the global interrupt enable bit in main control register */
+	{
+		u32 ctl_reg = readl(hws->bar0_base + HWS_REG_CTL);
+		ctl_reg |= HWS_CTL_IRQ_ENABLE_BIT;
+		writel(ctl_reg, hws->bar0_base + HWS_REG_CTL);
+		(void)readl(hws->bar0_base + HWS_REG_CTL); /* flush write */
+		dev_info(&pdev->dev, "Global IRQ enable bit set in control register\n");
+	}
+
+	/* F) Open the global gate just like legacy did: INT_EN_REG_BASE = 0x3ffff */
 	writel(0x0003ffff, hws->bar0_base + INT_EN_REG_BASE);
 	dev_info(&pdev->dev, "INT_EN_GATE readback=0x%08x\n",
 	         readl(hws->bar0_base + INT_EN_REG_BASE));

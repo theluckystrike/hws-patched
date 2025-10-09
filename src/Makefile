@@ -33,10 +33,11 @@ clean:
 	$(MAKE) -C $(KERNELDIR) M=$(PWD) clean
 
 # --------------------------------------------------------------------
-# clang-tidy setup
+# clang-tidy setup (optional)
 CLANG_TIDY    := clang-tidy
-ifeq (, $(shell which $(CLANG_TIDY)))
-$(error "$(CLANG_TIDY) not found! Please install clang-tidy.")
+HAVE_CLANG_TIDY := $(shell which $(CLANG_TIDY) 2>/dev/null)
+ifndef HAVE_CLANG_TIDY
+$(warning "$(CLANG_TIDY) not found! Skipping clang-tidy checks.")
 endif
 
 TIDY_CFLAGS   := $(EXTRA_CFLAGS)
@@ -50,9 +51,13 @@ C_SOURCES     := $(wildcard *.c)
 
 .PHONY: tidy
 tidy:
+ifdef HAVE_CLANG_TIDY
 	@echo ">> Running clang-tidy on: $(C_SOURCES)"
 	@for f in $(C_SOURCES); do \
 	  echo "   - $$f"; \
 	  $(CLANG_TIDY) -p . $$f -- $(TIDY_CFLAGS) $(TIDY_INCLUDES) $(TIDY_DEFINES); \
 	done
+else
+	@echo ">> clang-tidy not available, skipping tidy checks"
+endif
 

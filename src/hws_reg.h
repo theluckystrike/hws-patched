@@ -70,6 +70,8 @@
 #define HWS_SYS_DMA_BUSY_BIT     BIT(3)   /* 0x08 = DMA busy flag */
 
 #define HWS_REG_DEC_MODE       (CVBS_IN_BASE +  0 * PCIE_BARADDROFSIZE)
+#define HWS_REG_CTL            (CVBS_IN_BASE +  4 * PCIE_BARADDROFSIZE) /* Main control register */
+#define HWS_CTL_IRQ_ENABLE_BIT BIT(0)   /* Global interrupt enable bit */
 /*  Write 0x00 to fully reset decoder,
  *  set bit 31=1 to “start run”,
  *  low byte=0x13 selects YUYV/BT.709/etc,
@@ -96,6 +98,7 @@
 
 /* ── Buffer addresses (written once during init / reset) ─────────────────── */
 #define HWS_REG_VBUF1_ADDR            (CVBS_IN_BASE + 25 * PCIE_BARADDROFSIZE) /* base of host-visible buffer  */
+#define HWS_REG_DMA_ADDR(ch)          (CVBS_IN_BASE + (26 + (ch)) * PCIE_BARADDROFSIZE) /* per-channel DMA address */
 
 /* ── Per-channel live buffer toggles (read-only) ──────────────────────────── */
 #define HWS_REG_VBUF_TOGGLE(ch)       (CVBS_IN_BASE + (32 + (ch)) * PCIE_BARADDROFSIZE)

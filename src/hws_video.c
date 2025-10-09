@@ -970,7 +970,9 @@ static void hws_buffer_queue(struct vb2_buffer *vb)
 {
 	struct hws_video *vid = vb->vb2_queue->drv_priv;
 	struct hwsvideo_buffer *buf = to_hwsbuf(vb);
+	struct hws_pcie_dev *hws = vid->parent;
 	unsigned long flags;
+	dma_addr_t dma_addr;
     pr_debug("buffer_queue(ch=%u): vb=%p sizeimage=%u q_active=%d\n",
              vid->channel_index, vb, vid->pix.sizeimage, READ_ONCE(vid->cap_active));
 
@@ -983,6 +985,11 @@ static void hws_buffer_queue(struct vb2_buffer *vb)
                  vid->channel_index, &buf->vb.vb2_buf);
         list_del_init(&buf->list);
 		vid->active = buf;
+		
+		/* Program DMA address register with buffer's physical address */
+		dma_addr = vb2_dma_contig_plane_dma_addr(&buf->vb.vb2_buf, 0);
+		iowrite32(lower_32_bits(dma_addr), hws->bar0_base + HWS_REG_DMA_ADDR(vid->channel_index));
+		
 		hws_program_video_from_vb2(vid->parent, vid->channel_index,
 					   &buf->vb.vb2_buf);
         if (check_video_capture(vid->parent, vid->channel_index) == 0) {
@@ -1157,12 +1164,19 @@ static int hws_start_streaming(struct vb2_queue *q, unsigned int count)
 
     /* Only program/enable HW if we actually have a buffer */
     if (to_program) {
+        dma_addr_t dma_addr;
+        
+        /* First, program the DMA address register */
+        dma_addr = vb2_dma_contig_plane_dma_addr(&to_program->vb.vb2_buf, 0);
+        iowrite32(lower_32_bits(dma_addr), hws->bar0_base + HWS_REG_DMA_ADDR(v->channel_index));
+        
+        /* Then program the rest of the video buffer setup */
         wmb();
         hws_program_video_from_vb2(hws, v->channel_index,
                                    &to_program->vb.vb2_buf);
 
-        pr_info("start_streaming(ch=%u): programmed first buffer %p\n",
-                 v->channel_index, to_program);
+        pr_info("start_streaming(ch=%u): programmed first buffer %p with DMA addr 0x%08x\n",
+                 v->channel_index, to_program, lower_32_bits(dma_addr));
         (void)readl(hws->bar0_base + HWS_REG_INT_STATUS); /* flush posted writes */
 
         en = check_video_capture(hws, v->channel_index);
@@ -1170,14 +1184,15 @@ static int hws_start_streaming(struct vb2_queue *q, unsigned int count)
         if (en < 0)
             return en;
 
+        /* Only start hardware streaming after DMA address is programmed */
         if (en == 0) {
             hws_enable_video_capture(hws, v->channel_index, true);
-            pr_info("start_streaming(ch=%u): capture %s\n",
-                     v->channel_index, en ? "already enabled" : "enabled now");
-        } else {
-            pr_info("start_streaming(ch=%u): no buffer to program yet (will arm on QBUF)\n",
+            pr_info("start_streaming(ch=%u): capture enabled after DMA programming\n",
                      v->channel_index);
-         }
+        }
+    } else {
+        pr_info("start_streaming(ch=%u): no buffer to program yet (will arm on QBUF)\n",
+                 v->channel_index);
     }
     hws_dump_irq_regs(hws, "start_streaming:exit");
     hws_video_dump_all_regs(hws, "start streaming:exit");
