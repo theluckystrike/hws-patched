@@ -50,6 +50,7 @@ struct hws_adapter;
 struct hwsvideo_buffer {
 	struct vb2_v4l2_buffer vb;
 	struct list_head       list;
+	int                    slot;  /* for two-buffer approach */
 };
 
 struct hws_video {
@@ -103,6 +104,16 @@ struct hws_video {
 	unsigned long            last_frame_jiffies;
 	u32                      timeout_count;
 	u32                      error_count;
+
+	/* ───── two-buffer approach ───── */
+	dma_addr_t               ring_dma;
+	void                    *ring_cpu;
+	size_t                   ring_size;
+	u32                      ring_toggle_prev;
+	u32                      ring_toggle_hw;
+	bool                     ring_first_half_copied;
+	unsigned long            ring_last_toggle_jiffies;
+	u32                      queued_count;
 
 	/* ───── misc counters ───── */
 	int signal_loss_cnt;
