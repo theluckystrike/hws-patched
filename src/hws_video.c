@@ -1201,17 +1201,16 @@ static void hws_buffer_queue(struct vb2_buffer *vb)
 		vid->active = buf;
 		
 		if (ring_mode) {
-			/* Set up ring buffer if not already done */
-			if (!vid->ring_cpu) {
-				spin_unlock_irqrestore(&vid->irq_lock, flags);
-				if (hws_ring_setup(vid) == 0) {
-					wmb();
-					hws_set_dma_doorbell(hws, vid->channel_index, vid->ring_dma, "buffer_queue_ring");
-				}
-				return;
-			} else {
+			/* Ring buffer should already be set up by start_streaming */
+			if (vid->ring_cpu) {
 				wmb();
-				hws_set_dma_doorbell(hws, vid->channel_index, vid->ring_dma, "buffer_queue_ring_existing");
+				hws_set_dma_doorbell(hws, vid->channel_index, vid->ring_dma, "buffer_queue_ring");
+			} else {
+				pr_warn("buffer_queue(ch=%u): ring mode but no ring buffer allocated\n", vid->channel_index);
+				/* Fall back to direct mode */
+				dma_addr_t dma_addr = vb2_dma_contig_plane_dma_addr(&buf->vb.vb2_buf, 0);
+				iowrite32(lower_32_bits(dma_addr), hws->bar0_base + HWS_REG_DMA_ADDR(vid->channel_index));
+				hws_program_video_from_vb2(vid->parent, vid->channel_index, &buf->vb.vb2_buf);
 			}
 		} else {
 			/* Direct VB2 buffer programming */
@@ -1219,7 +1218,7 @@ static void hws_buffer_queue(struct vb2_buffer *vb)
 			iowrite32(lower_32_bits(dma_addr), hws->bar0_base + HWS_REG_DMA_ADDR(vid->channel_index));
 			
 			hws_program_video_from_vb2(vid->parent, vid->channel_index,
-						   &buf->vb.vb2_buf);
+					   &buf->vb.vb2_buf);
 			if (check_video_capture(vid->parent, vid->channel_index) == 0) {
 				pr_debug("buffer_queue(ch=%u): enabling capture now\n",
 				         vid->channel_index);
@@ -1346,8 +1345,12 @@ void hws_video_dump_all_regs(struct hws_pcie_dev *hws, const char *tag)
 		pr_info("  CH%u: cap_active=%d stop_req=%d active=%p seq=%u timeout_cnt=%u err_cnt=%u\n",
 		        ch, v->cap_active, v->stop_requested, v->active, 
 		        v->sequence_number, v->timeout_count, v->error_count);
-		pr_info("       DMA_ADDR_REG=0x%08x queue_len=%d\n", 
-		        dma_addr_reg, !list_empty(&v->capture_queue));
+		pr_info("       DMA_ADDR_REG=0x%08x queue_len=%d queued_count=%u\n", 
+		        dma_addr_reg, !list_empty(&v->capture_queue), v->queued_count);
+		pr_info("       ring_cpu=%p ring_dma=0x%llx ring_size=%zu\n",
+		        v->ring_cpu, (unsigned long long)v->ring_dma, v->ring_size);
+		pr_info("       ring_toggle_prev=%u ring_toggle_hw=%u first_half_copied=%d\n",
+		        v->ring_toggle_prev, v->ring_toggle_hw, v->ring_first_half_copied);
 	}
 
 	/* Decoded INT_STATUS */
@@ -1412,13 +1415,18 @@ static int hws_start_streaming(struct vb2_queue *q, unsigned int count)
             /* Set up ring buffer and start DMA to ring */
             ret = hws_ring_setup(v);
             if (ret) {
-                pr_err("start_streaming(ch=%u): ring setup failed: %d\n", v->channel_index, ret);
-                return ret;
+                pr_warn("start_streaming(ch=%u): ring setup failed %d, falling back to direct mode\n", 
+                        v->channel_index, ret);
+                ring_mode = false;
+                /* Fall through to direct mode */
+            } else {
+                wmb();
+                hws_set_dma_doorbell(hws, v->channel_index, v->ring_dma, "start_streaming_ring");
+                pr_info("start_streaming(ch=%u): started ring buffer mode\n", v->channel_index);
             }
-            wmb();
-            hws_set_dma_doorbell(hws, v->channel_index, v->ring_dma, "start_streaming_ring");
-            pr_info("start_streaming(ch=%u): started ring buffer mode\n", v->channel_index);
-        } else {
+        }
+        
+        if (!ring_mode) {
             /* Direct VB2 buffer programming */
             dma_addr_t dma_addr = vb2_dma_contig_plane_dma_addr(&to_program->vb.vb2_buf, 0);
             
@@ -1480,6 +1488,9 @@ static void hws_stop_streaming(struct vb2_queue *q)
     del_timer_sync(&v->dma_timeout_timer);
 
     hws_enable_video_capture(v->parent, v->channel_index, false);
+    
+    /* Release ring buffer if allocated */
+    hws_ring_release(v);
 
     /* 2) Collect in-flight + queued under the IRQ lock */
     spin_lock_irqsave(&v->irq_lock, flags);

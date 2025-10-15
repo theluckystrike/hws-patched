@@ -97,7 +97,7 @@ void hws_bh_video(struct tasklet_struct *t)
         struct vb2_v4l2_buffer *vb2v = &done->vb;
 
         /* Cancel timeout timer since we got the frame */
-        del_timer(&v->dma_timeout_timer);
+        del_timer_sync(&v->dma_timeout_timer);
         v->last_frame_jiffies = jiffies;
 
         dma_rmb(); /* device writes visible before userspace sees it */
